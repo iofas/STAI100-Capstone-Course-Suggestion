@@ -29,6 +29,6 @@ regardless of which 8 are chosen: **Prompt Engineering**, **Chat UI**,
 | SQL Agent | Generate and execute SQL against a relational DB from natural language | bea | **Working** (see `sql_agent/`) |
 | Tool Use | Integrate at least one external tool/API | — | Not started |
 | Chat UI | Conversational interface (e.g. Streamlit, Gradio) | kean | Not started |
-| API Endpoint | Expose the agent via a REST API | gideon | Not started |
-| LLMOps Monitoring | Log traces, latency, token usage, errors (e.g. MLflow) | gideon | Not started |
+| API Endpoint | Expose the agent via a REST API | gideon | **Working** (see `api.py`) |
+| LLMOps Monitoring | Log traces, latency, token usage, errors (e.g. MLflow) | gideon | **Working** (see `sql_agent/monitoring.py`) |
 | Dockerization | Package the app in a Dockerfile with build/run docs | kean | Not started |

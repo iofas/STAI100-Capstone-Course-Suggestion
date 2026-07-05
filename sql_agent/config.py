@@ -20,9 +20,20 @@ DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 # current model names going forward.
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
+# The openai SDK defaults to a 10-minute timeout, which makes a slow/stuck
+# API call look like a silent freeze instead of a clear error. Fail faster
+# so it's obvious when DeepSeek isn't responding.
+DEEPSEEK_TIMEOUT_SECONDS = float(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "45"))
+
 # Path to the SQLite database generated from data/unformatted/*.txt
 # (see course_offerings_inserts.sql at the repo root).
 DB_PATH = os.getenv("COURSE_DB_PATH", "course_offerings.db")
+
+# LLMOps monitoring (MLflow). Start the tracking server separately with
+# `uvx mlflow server` (defaults to http://localhost:5000) before running the
+# agent, otherwise traces just fail to upload instead of crashing the app.
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+MLFLOW_EXPERIMENT_NAME = os.getenv("MLFLOW_EXPERIMENT_NAME", "sql_agent")
 
 
 def require_api_key() -> str:

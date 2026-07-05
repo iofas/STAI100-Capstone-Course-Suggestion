@@ -4,11 +4,20 @@ executed against course_offerings.db -> structured result.
 """
 import re
 
+import mlflow
 from openai import OpenAI
 
-from .config import DEEPSEEK_BASE_URL, DEEPSEEK_MODEL, require_api_key
+from .config import (
+    DEEPSEEK_BASE_URL,
+    DEEPSEEK_MODEL,
+    DEEPSEEK_TIMEOUT_SECONDS,
+    require_api_key,
+)
 from .db import TABLE_NAME, get_connection, get_schema_description
+from .monitoring import setup_tracing
 from .prompts import build_messages
+
+setup_tracing()
 
 _client = None
 
@@ -24,7 +33,11 @@ _RESPONSE_PATTERN = re.compile(r"REASONING:\s*(.*?)\s*SQL:\s*(.*)", re.DOTALL)
 def _get_client() -> OpenAI:
     global _client
     if _client is None:
-        _client = OpenAI(api_key=require_api_key(), base_url=DEEPSEEK_BASE_URL)
+        _client = OpenAI(
+            api_key=require_api_key(),
+            base_url=DEEPSEEK_BASE_URL,
+            timeout=DEEPSEEK_TIMEOUT_SECONDS,
+        )
     return _client
 
 
@@ -84,28 +97,40 @@ def run_query(sql: str) -> list[dict]:
         return [dict(row) for row in rows]
 
 
+@mlflow.trace(name="sql_agent.ask", span_type="AGENT")
 def ask(question: str) -> dict:
     """
     End-to-end entry point: question -> generated SQL -> guardrail check ->
     execution -> structured result. This is the function other modules
     (Chat UI, API endpoint) should import and call.
+
+    Wrapped in an MLflow trace so every call - including the nested LLM
+    call captured by mlflow.openai.autolog() - is logged with latency,
+    token usage, and (via the span attributes below) guardrail rejections,
+    SQL execution errors, and row counts.
     """
+    span = mlflow.get_current_active_span()
+
     result = generate_sql(question)
     sql = result["sql"]
 
     if not _is_safe_select(sql):
-        return {
-            **result,
-            "rows": None,
-            "error": (
-                "Generated query was rejected by the safety guardrail (must be "
-                f"a single read-only SELECT against {TABLE_NAME})."
-            ),
-        }
+        error = (
+            "Generated query was rejected by the safety guardrail (must be "
+            f"a single read-only SELECT against {TABLE_NAME})."
+        )
+        if span:
+            span.set_attributes({"guardrail_rejected": True, "error": error})
+        return {**result, "rows": None, "error": error}
 
     try:
         rows = run_query(sql)
     except Exception as exc:  # surface DB errors as part of the structured result
-        return {**result, "rows": None, "error": f"SQL execution failed: {exc}"}
+        error = f"SQL execution failed: {exc}"
+        if span:
+            span.set_attributes({"sql_execution_error": True, "error": error})
+        return {**result, "rows": None, "error": error}
 
+    if span:
+        span.set_attributes({"row_count": len(rows)})
     return {**result, "rows": rows, "error": None}
