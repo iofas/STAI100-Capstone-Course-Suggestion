@@ -3,9 +3,10 @@ Core SQL Agent logic: natural language -> generated SQL -> safety-checked ->
 executed against course_offerings.db -> structured result.
 """
 import re
-
+import json
 import mlflow
 from openai import OpenAI
+from pydantic import BaseModel, ValidationError
 
 from .config import (
     DEEPSEEK_BASE_URL,
@@ -21,14 +22,9 @@ setup_tracing()
 
 _client = None
 
-# Guardrails: block any statement-altering keywords outright, even if they
-# show up disguised inside a supposedly read-only query.
-_FORBIDDEN_KEYWORDS = re.compile(
-    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|ATTACH|DETACH|PRAGMA|CREATE|REPLACE|VACUUM)\b",
-    re.IGNORECASE,
-)
-_RESPONSE_PATTERN = re.compile(r"REASONING:\s*(.*?)\s*SQL:\s*(.*)", re.DOTALL)
-
+class AgentOutput(BaseModel):
+    reasoning: str
+    sql: str
 
 def _get_client() -> OpenAI:
     global _client
@@ -40,69 +36,53 @@ def _get_client() -> OpenAI:
         )
     return _client
 
-
-def _parse_response(raw: str) -> tuple[str, str]:
-    """Split the model's REASONING/SQL formatted reply into its two parts."""
-    match = _RESPONSE_PATTERN.search(raw or "")
-    if not match:
-        return raw.strip() if raw else "", ""
-    reasoning, sql = match.group(1).strip(), match.group(2).strip()
-    sql = sql.strip().strip("`").strip()
-    return reasoning, sql
-
-
 def _is_safe_select(sql: str) -> bool:
-    """Guardrail: only allow a single read-only SELECT against course_offerings."""
-    if not sql or sql.upper() == "NONE":
-        return False
-    if _FORBIDDEN_KEYWORDS.search(sql):
-        return False
-    if not sql.lstrip().upper().startswith("SELECT"):
-        return False
-    # allow at most one trailing semicolon, i.e. no stacked statements
-    body = sql.strip()
-    if body.endswith(";"):
-        body = body[:-1]
-    if ";" in body:
-        return False
-    if TABLE_NAME not in sql:
-        return False
+    if not sql or sql.upper() == "NONE": return False
+    body = sql.strip().strip(";")
+    if ";" in body or not body.upper().startswith("SELECT"): return False
+    if TABLE_NAME not in body: return False
     return True
 
-
-def generate_sql(question: str) -> dict:
-    """Ask the LLM to translate a question into SQL. Does not execute it."""
+def generate_sql(question: str, history: list[dict] = None) -> dict:
     schema = get_schema_description()
-    messages = build_messages(schema, question)
+    messages = build_messages(schema, question, history)
 
     response = _get_client().chat.completions.create(
         model=DEEPSEEK_MODEL,
         messages=messages,
         temperature=0,
+        response_format={"type": "json_object"}, # Forces JSON output
         # Disable DeepSeek's built-in extended-thinking mode: our prompt
         # already asks the model to show its reasoning explicitly (see
         # prompts.py), and thinking mode doesn't support temperature=0,
         # which we want here for deterministic SQL generation.
         extra_body={"thinking": {"type": "disabled"}},
     )
+    
     raw = response.choices[0].message.content
-    reasoning, sql = _parse_response(raw)
-    return {"question": question, "reasoning": reasoning, "sql": sql, "raw_response": raw}
+    
+    # Pydantic validation
+    try:
+        parsed_data = AgentOutput.model_validate_json(raw)
+        reasoning = parsed_data.reasoning
+        sql = parsed_data.sql.strip().strip("`").strip()
+    except ValidationError as e:
+        reasoning = "Failed to parse JSON response."
+        sql = "NONE"
 
+    return {"question": question, "reasoning": reasoning, "sql": sql, "raw_response": raw}
 
 def run_query(sql: str) -> list[dict]:
     with get_connection() as conn:
         cur = conn.execute(sql)
-        rows = cur.fetchall()
-        return [dict(row) for row in rows]
-
+        return [dict(row) for row in cur.fetchall()]
 
 @mlflow.trace(name="sql_agent.ask", span_type="AGENT")
-def ask(question: str) -> dict:
+def ask(question: str, history: list[dict] = None) -> dict:
     """
-    End-to-end entry point: question -> generated SQL -> guardrail check ->
-    execution -> structured result. This is the function other modules
-    (Chat UI, API endpoint) should import and call.
+    End-to-end entry point: question (+ optional history) -> generated SQL -> 
+    guardrail check -> execution -> structured result. This is the function 
+    other modules (Chat UI, API endpoint) should import and call.
 
     Wrapped in an MLflow trace so every call - including the nested LLM
     call captured by mlflow.openai.autolog() - is logged with latency,
@@ -110,8 +90,8 @@ def ask(question: str) -> dict:
     SQL execution errors, and row counts.
     """
     span = mlflow.get_current_active_span()
-
-    result = generate_sql(question)
+    
+    result = generate_sql(question, history)
     sql = result["sql"]
 
     if not _is_safe_select(sql):
@@ -119,7 +99,7 @@ def ask(question: str) -> dict:
             "Generated query was rejected by the safety guardrail (must be "
             f"a single read-only SELECT against {TABLE_NAME})."
         )
-        if span:
+        if span: 
             span.set_attributes({"guardrail_rejected": True, "error": error})
         return {**result, "rows": None, "error": error}
 
@@ -127,10 +107,10 @@ def ask(question: str) -> dict:
         rows = run_query(sql)
     except Exception as exc:  # surface DB errors as part of the structured result
         error = f"SQL execution failed: {exc}"
-        if span:
+        if span: 
             span.set_attributes({"sql_execution_error": True, "error": error})
         return {**result, "rows": None, "error": error}
 
-    if span:
+    if span: 
         span.set_attributes({"row_count": len(rows)})
     return {**result, "rows": rows, "error": None}

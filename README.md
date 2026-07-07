@@ -37,7 +37,7 @@ uvx mlflow server
 ```bash
 python demo_sql_agent.py "What GE subjects can I take between 12:30pm and 16:00 that I haven't taken, given I've taken GEWORLD LCFAITH LCENWRD?"
 
-# or interactively:
+# or interactively (with short-term conversation memory):
 python demo_sql_agent.py
 ```
 
@@ -62,12 +62,14 @@ http://localhost:8000/docs. Or call it directly:
 ```bash
 curl -X POST http://localhost:8000/ask \
   -H "Content-Type: application/json" \
-  -d '{"question": "What sections of GEARTAP are on Mondays?"}'
+  -d '{
+        "question": "What sections of GEARTAP are on Mondays?", 
+        "history": []
+      }'
 ```
 
 `GET /health` is a plain liveness check. `POST /ask` returns
-`{question, reasoning, sql, rows, error}` - same shape as `sql_agent.ask()`,
-minus the raw model text. Guardrail rejections and SQL errors still come
+`{question, reasoning, sql, rows, error, updated_history}`. Guardrail rejections and SQL errors still come
 back as a normal 200 with `error` populated; only a genuine upstream
 failure (DeepSeek unreachable/timed out) returns a 502.
 
@@ -106,9 +108,9 @@ It is not publicly available since it contains personally identifiable informati
 
 Translates a natural-language question into a single read-only SQL query
 against `course_offerings`, executes it, and returns a structured result.
-Uses DeepSeek's API (OpenAI-compatible) via the `openai` SDK, plain Python
-(no agent framework), with a guardrail that only allows single `SELECT`
-statements against the `course_offerings` table.
+Uses DeepSeek's API via the `openai` SDK, enforcing strict JSON outputs via 
+Pydantic validation, and maintains short-term conversational memory. It includes a 
+guardrail that only allows single `SELECT` statements against the `course_offerings` table.
 
 Other modules (Chat UI, API endpoint) should call `sql_agent.ask(question)`,
 which returns `{question, reasoning, sql, raw_response, rows, error}`.

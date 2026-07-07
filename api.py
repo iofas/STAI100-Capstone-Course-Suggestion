@@ -43,6 +43,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+class Message(BaseModel):
+    role: str
+    content: str
 
 class AskRequest(BaseModel):
     question: str = Field(
@@ -51,6 +54,7 @@ class AskRequest(BaseModel):
         description="Natural-language question about course offerings.",
         examples=["What GE subjects can I take between 12:30pm and 16:00?"],
     )
+    history: Optional[list[Message]] = []
 
 
 class AskResponse(BaseModel):
@@ -59,6 +63,7 @@ class AskResponse(BaseModel):
     sql: str
     rows: Optional[list[dict[str, Any]]] = None
     error: Optional[str] = None
+    updated_history: list[Message]
 
 
 @app.get("/health")
@@ -79,12 +84,20 @@ def ask_endpoint(payload: AskRequest) -> dict:
     can render them inline. Only genuine upstream failures (e.g. the
     DeepSeek call itself erroring out or timing out) raise a 502.
     """
+    history_dicts = [{"role": msg.role, "content": msg.content} for msg in payload.history]
+
     try:
-        result = ask(payload.question)
+        result = ask(payload.question, history=history_dicts)
     except Exception as exc:  # e.g. DeepSeek timeout/auth/network failure
         raise HTTPException(
             status_code=502, detail=f"SQL Agent upstream call failed: {exc}"
         ) from exc
+
+    # Append current exchange to send back to frontend
+    new_history = history_dicts + [
+        {"role": "user", "content": payload.question},
+        {"role": "assistant", "content": result["raw_response"]}
+    ]
 
     return {
         "question": result["question"],
@@ -92,4 +105,5 @@ def ask_endpoint(payload: AskRequest) -> dict:
         "sql": result["sql"],
         "rows": result["rows"],
         "error": result["error"],
+        "updated_history": new_history
     }

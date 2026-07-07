@@ -20,12 +20,12 @@ regardless of which 8 are chosen: **Prompt Engineering**, **Chat UI**,
 | Module | Description | Owner | Status |
 |---|---|---|---|
 | Prompt Engineering | Design and iterate on system prompts; few-shot, chain-of-thought, structured prompt patterns | bea | In progress (see `sql_agent/prompts.py`) |
-| Structured Outputs | Return typed, schema-validated responses (JSON, Pydantic, etc.) | jp | Not started |
+| Structured Outputs | Return typed, schema-validated responses (JSON, Pydantic, etc.) | jp | **Working** (see `sql_agent/agent.py`) |
 | Disambiguation | Detect ambiguous inputs and clarify intent before proceeding | — | Not started |
 | RAG | Retrieve relevant context from a vector/SQL/graph store to ground responses | bea | Not started |
-| Memory | Short-term session memory and/or long-term persistent memory | jp | Not started |
+| Memory | Short-term session memory and/or long-term persistent memory | jp | **Working** (see `demo_sql_agent.py` & `api.py`) |
 | Guardrails | Input/output validation, topic filtering, safety checks | — | Not started |
-| ReAct Agent | Reasoning + acting loop, iterative planning and execution | jp (maybe essential) | Not started |
+| ReAct Agent | Reasoning + acting loop, iterative planning and execution | — | Not started |
 | SQL Agent | Generate and execute SQL against a relational DB from natural language | bea | **Working** (see `sql_agent/`) |
 | Tool Use | Integrate at least one external tool/API | — | Not started |
 | Chat UI | Conversational interface (e.g. Streamlit, Gradio) | kean | Not started |

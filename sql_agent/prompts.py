@@ -1,3 +1,5 @@
+import json
+
 """
 Prompt design for the SQL Agent.
 
@@ -27,11 +29,14 @@ modify data, respond with SQL: NONE and explain why in REASONING.
 5. Think step by step about which columns and filters are needed before \
 writing the query, and show that reasoning.
 
-Always respond in exactly this format, with no markdown code fences and \
-no extra commentary outside these two fields:
+You must respond in valid JSON format containing exactly two keys: \
+"reasoning" and "sql". "reasoning" is a string containing the brief \
+step-by-step reasoning about the tables/columns/filters needed. \
+"sql" is a string containing the single valid SQLite SELECT statement on one line, or NONE. \
+There must be no other text in the response, with no markdown code fences and \
+no extra commentary outside those two fields:
 
-REASONING: <brief step-by-step reasoning about the tables/columns/filters needed>
-SQL: <a single valid SQLite SELECT statement on one line, or NONE>
+{{"reasoning": "...", "sql": "..."}}
 """
 
 # Few-shot examples double as the "chain-of-thought" pattern: each shows the
@@ -104,7 +109,7 @@ FEW_SHOT_EXAMPLES = [
 ]
 
 
-def build_messages(schema: str, question: str) -> list[dict]:
+def build_messages(schema: str, question: str, history: list[dict] = None) -> list[dict]:
     """Assemble the chat messages sent to the model: system prompt with the
     live schema, a few worked examples, then the user's real question."""
     messages = [{"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(schema=schema)}]
@@ -114,9 +119,12 @@ def build_messages(schema: str, question: str) -> list[dict]:
         messages.append(
             {
                 "role": "assistant",
-                "content": f"REASONING: {example['reasoning']}\nSQL: {example['sql']}",
+                "content": json.dumps({"reasoning": example["reasoning"], "sql": example["sql"]})
             }
         )
 
+    if history:
+        messages.extend(history)
+    
     messages.append({"role": "user", "content": question})
     return messages
