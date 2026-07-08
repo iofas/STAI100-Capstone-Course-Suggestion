@@ -53,7 +53,7 @@ def _is_safe_select(sql: str) -> bool:
     if ";" in body or not body.upper().startswith("SELECT"): return False
     if _COMMA_JOIN_PATTERN.search(body): return False
     referenced_tables = {t.lower() for t in _TABLE_REF_PATTERN.findall(body)}
-    if TABLE_NAME.lower() not in referenced_tables: return False
+    if not referenced_tables: return False
     if not referenced_tables.issubset(_ALLOWED_TABLES): return False
     return True
 
@@ -107,6 +107,12 @@ def ask(question: str, history: list[dict] = None) -> dict:
     
     result = generate_sql(question, history)
     sql = result["sql"]
+
+    # Guardrail check: if the SQL is empty, "NONE", or unsafe, reject it
+    if not sql or sql.upper() == "NONE":
+        if span: 
+            span.set_attributes({"row_count": 0, "status": "unanswerable"})
+        return {**result, "rows": [], "error": None}
 
     if not _is_safe_select(sql):
         error = (

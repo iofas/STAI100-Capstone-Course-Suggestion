@@ -29,6 +29,14 @@ second statement.
 modify data, respond with SQL: NONE and explain why in REASONING.
 5. Think step by step about which columns and filters are needed before \
 writing the query, and show that reasoning.
+6. CONTEXT RETENTION: When the user asks a follow-up question, \
+you MUST carry over all active constraints (like time windows, \
+specific days, or excluded subjects) from the previous turns \
+unless the user explicitly removes them.
+7. MANDATORY ELIGIBILITY: If a student mentions classes they have NOT \
+taken, you MUST treat this as a strict filter. Use a NOT EXISTS subquery \
+against course_prerequisites to ensure the requested course does not require \
+the untaken class. Never ignore constraints just because a user asks for a specific class.
 
 You must respond in valid JSON format containing exactly two keys: \
 "reasoning" and "sql". "reasoning" is a string containing the brief \
@@ -136,6 +144,25 @@ FEW_SHOT_EXAMPLES = [
             "permitted for this read-only agent."
         ),
         "sql": "NONE",
+    },
+    {
+        "question": "Show me sections of LCLSTWO. Keep in mind I have not taken LCLSONE yet.",
+        "reasoning": (
+            "The user wants LCLSTWO, but explicitly states they have NOT taken "
+            "LCLSONE. Per the eligibility rule, I must enforce this constraint. "
+            "I will filter course_offerings to 'LCLSTWO' but add a NOT EXISTS "
+            "subquery against course_prerequisites to ensure LCLSTWO does not "
+            "have 'LCLSONE' listed as a prerequisite. If it does, the query "
+            "will correctly return empty."
+        ),
+        "sql": (
+            "SELECT co.course_code, co.section, co.teacher, co.sched1_day, "
+            "co.sched1_time_start, co.sched1_time_end, co.sched2_day, "
+            "co.sched2_time_start, co.sched2_time_end FROM course_offerings co "
+            "WHERE co.course_code = 'LCLSTWO' AND NOT EXISTS "
+            "(SELECT 1 FROM course_prerequisites cp WHERE cp.course_code = co.course_code "
+            "AND cp.prerequisite_code = 'LCLSONE');"
+        ),
     },
 ]
 
