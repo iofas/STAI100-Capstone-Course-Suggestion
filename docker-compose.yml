@@ -1,0 +1,43 @@
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    container_name: course-agent-mlflow
+    command: mlflow server --host 0.0.0.0 --port 5000
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
+
+  api:
+    build: .
+    container_name: course-agent-api
+    command: uvicorn api:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # override .env's localhost value so the API reaches the mlflow
+      # *container* by its service name instead
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    volumes:
+      # course_offerings.db is data, not code - mount it read-only rather
+      # than baking it into the image
+      - ./course_offerings.db:/app/course_offerings.db:ro
+    depends_on:
+      - mlflow
+
+  chatui:
+    build: .
+    container_name: course-agent-chatui
+    command: streamlit run chat_ui.py --server.address 0.0.0.0 --server.port 8501
+    ports:
+      - "8501:8501"
+    environment:
+      # talk to the api *container*, not localhost
+      - API_URL=http://api:8000
+    depends_on:
+      - api
+
+volumes:
+  mlflow_data:
