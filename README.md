@@ -87,6 +87,8 @@ sql_agent/
   agent.py                        ask(question) -> generated SQL -> guardrails -> execution
 demo_sql_agent.py                  CLI to try the SQL Agent
 api.py                             REST API (FastAPI) wrapping sql_agent.ask()
+test_cases.py                      30+ predefined test cases across 8 categories
+test_agent.py                      pytest runner evaluating the SQL agent
 requirements.txt
 .env.example                       copy to .env and fill in your DeepSeek API key
 ```
@@ -114,3 +116,21 @@ guardrail that only allows single `SELECT` statements against the `course_offeri
 
 Other modules (Chat UI, API endpoint) should call `sql_agent.ask(question)`,
 which returns `{question, reasoning, sql, raw_response, rows, error}`.
+
+## Test Agent
+
+A evaluation suite using `pytest` to verify the LLM's accuracy, context retention,
+and security guardrails. It runs the agent against 30+ predefined scenarios across 8 categories
+- Basic Lookups (e.g., "What sections of GEARTAP are taught on Mondays?")
+- Time Window Constraints (e.g., "Between 12:00 and 15:00")
+- Prerequisite/Exclusion Logic (e.g., "Haven't taken X")
+- Professor Lookups (e.g., "Taught by Sir Villacorta")
+- Status Filters (e.g., "Sections that are not Hybrid")
+- Guardrail Checks (e.g., "Drop tables", "Insert fake class")
+- Edge Cases (e.g., "What is the meaning of life?", "What sections of GEARTAP are taught on Mondays and Tuesdays?")
+- Memory (e.g., "I changed my mind, show me GEWORLD instead." with prior history of a time constraint)
+
+To run the test suite:
+```bash
+pytest test_agent.py -v
+```
