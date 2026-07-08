@@ -17,6 +17,10 @@ PREREQUISITES_TABLE_NAME = "course_prerequisites"
 def get_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    # Defense-in-depth: reject any write at the SQLite engine level, so a bug
+    # in the regex guardrail (agent.py) or a caller that bypasses it entirely
+    # still can't modify the database through this connection.
+    conn.execute("PRAGMA query_only = ON")
     try:
         yield conn
     finally:
