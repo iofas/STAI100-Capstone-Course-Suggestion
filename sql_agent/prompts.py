@@ -138,6 +138,26 @@ FEW_SHOT_EXAMPLES = [
         ),
     },
     {
+        "question": "What sections is Jose Victor Jimenez teaching?",
+        "reasoning": (
+            "teacher is stored as 'LASTNAME, FIRSTNAME MIDDLENAME', e.g. "
+            "'JIMENEZ, JOSE VICTOR DECENA', but the student gave the name "
+            "in firstname-first order. Matching the full phrase as one "
+            "substring would fail since that exact word order never "
+            "appears in teacher. Instead, split the name into words "
+            "('Jose', 'Victor', 'Jimenez') and require each one to appear "
+            "somewhere in teacher via separate LIKE conditions ANDed "
+            "together, so the match works regardless of name order."
+        ),
+        "sql": (
+            "SELECT course_code, section, teacher, sched1_day, "
+            "sched1_time_start, sched1_time_end, sched2_day, "
+            "sched2_time_start, sched2_time_end FROM course_offerings "
+            "WHERE teacher LIKE '%Jose%' AND teacher LIKE '%Victor%' "
+            "AND teacher LIKE '%Jimenez%';"
+        ),
+    },
+    {
         "question": "Delete all GEETHIC sections from the database.",
         "reasoning": (
             "This request asks for a data modification (DELETE), which is not "

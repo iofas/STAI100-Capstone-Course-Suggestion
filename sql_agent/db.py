@@ -90,6 +90,13 @@ def get_schema_description() -> str:
         "course_code is only eligible to suggest if every one of its "
         "prerequisite_code rows is in that completed list - use NOT EXISTS "
         "against course_prerequisites to enforce this, not just NOT IN "
-        "against the completed list on its own."
+        "against the completed list on its own. "
+        "teacher is stored as 'LASTNAME, FIRSTNAME MIDDLENAME' (e.g. "
+        "'JIMENEZ, JOSE VICTOR DECENA'), but a student may type the name in "
+        "any order. Never match on the full name as one substring in the "
+        "student's word order - instead split the name into individual "
+        "words and require each one to appear somewhere in teacher via a "
+        "separate 'teacher LIKE %word%' ANDed together, so the match works "
+        "regardless of what order the student typed the name in."
     )
     return "\n".join(lines)
