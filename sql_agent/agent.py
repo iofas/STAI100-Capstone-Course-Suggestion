@@ -36,8 +36,14 @@ def _get_client() -> OpenAI:
         )
     return _client
 
+_FORBIDDEN_KEYWORDS = re.compile(
+    r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|ATTACH|DETACH|PRAGMA|CREATE|REPLACE|VACUUM)\b",
+    re.IGNORECASE,
+)
+
 def _is_safe_select(sql: str) -> bool:
     if not sql or sql.upper() == "NONE": return False
+    if _FORBIDDEN_KEYWORDS.search(sql): return False
     body = sql.strip().strip(";")
     if ";" in body or not body.upper().startswith("SELECT"): return False
     if TABLE_NAME not in body: return False
