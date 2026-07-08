@@ -45,12 +45,19 @@ def get_schema_description() -> str:
     Introspects the live database rather than hardcoding column names, so the
     prompt always matches whatever is actually in course_offerings.db.
     """
+    lines = []
     with get_connection() as conn:
-        lines = _describe_table(conn, TABLE_NAME)
-        lines.append("")
-        lines.extend(_describe_table(conn, PREREQUISITES_TABLE_NAME))
+        for table in [TABLE_NAME, PREREQUISITES_TABLE_NAME]:
+            cur = conn.execute(f"PRAGMA table_info({table})")
+            columns = cur.fetchall()
+            
+            lines.append(f"Table: {table}")
+            lines.append("Columns:")
+            for col in columns:
+                nullable = "" if col["notnull"] or col["pk"] else " (nullable)"
+                lines.append(f"  - {col['name']} {col['type']}{nullable}")
+            lines.append("")
 
-    lines.append("")
     lines.append(
         "Notes: sched1_day / sched2_day use single-letter codes: "
         "M=Monday, T=Tuesday, W=Wednesday, H=Thursday, F=Friday, S=Saturday. "
