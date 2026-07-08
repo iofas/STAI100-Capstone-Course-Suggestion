@@ -75,7 +75,7 @@ def get_schema_description() -> str:
         "schedule, teacher) rather than collapsing to DISTINCT course_code, "
         "unless the student explicitly asks to exclude one of those fields. "
         "Students colloquially call every course_code in this table a "
-        "'GE subject', regardless of whether it starts with GE or LC - both "
+        "'GE', regardless of whether it starts with GE or LC - both "
         "prefixes belong to the same general-elective pool. "
         "When a student describes a free time window (e.g. 'a break between "
         "12:30 and 16:00'), a section only fits if ALL of its meetings are "

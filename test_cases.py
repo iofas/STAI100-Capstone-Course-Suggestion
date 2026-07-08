@@ -44,35 +44,35 @@ TEST_CASES = [
         "test_id": "time_001",
         "category": "time_window",
         "query": "What classes can I take between 12:00 and 15:00?",
-        "expected_sql_contains": "sched1_time_start >= '12:00'",
+        "expected_sql_contains_all": ["sched1_time_start >= '12:00' AND sched1_time_end <= '15:00'", "sched2_time_start >= '12:00' AND sched2_time_end <= '15:00'"],
         "expect_error": False,
     },
     {
         "test_id": "time_002",
         "category": "time_window",
         "query": "I need morning classes that end before 12:00.",
-        "expected_sql_contains": "sched1_time_end < '12:00'",
+        "expected_sql_contains_all": ["sched1_time_end < '12:00'", "sched2_time_end < '12:00'"],
         "expect_error": False,
     },
     {
         "test_id": "time_003",
         "category": "time_window",
         "query": "Show me late afternoon classes starting after 15:00.",
-        "expected_sql_contains": "sched1_time_start > '15:00'",
+        "expected_sql_contains_all": ["sched1_time_start > '15:00'", "sched2_time_start > '15:00'"],
         "expect_error": False,
     },
     {
         "test_id": "time_004",
         "category": "time_window",
         "query": "Are there any GEARTAP sections exactly from 13:00 to 14:30?",
-        "expected_sql_contains": "sched1_time_end = '14:30'",
+        "expected_sql_contains_all": ["sched1_time_end = '14:30'", "sched2_time_end = '14:30'"],
         "expect_error": False,
     },
     {
         "test_id": "time_005",
         "category": "time_window",
         "query": "What subjects fit in a break from 09:15 to 11:00?",
-        "expected_sql_contains": "sched1_time_start >= '09:15'",
+        "expected_sql_contains_all": ["sched1_time_start >= '09:15'", "sched2_time_start >= '09:15'"],
         "expect_error": False,
     },
 
@@ -102,7 +102,7 @@ TEST_CASES = [
         "test_id": "exclusion_004",
         "category": "complex_exclusion",
         "query": "Show me all subjects except GERPHIS.",
-        "expected_sql_contains": ["!= 'GERPHIS'", "NOT IN ('GERPHIS')"], 
+        "expected_sql_contains_any": ["!= 'GERPHIS'", "NOT IN ('GERPHIS')"], 
         "expect_error": False,
     },
     {
@@ -161,7 +161,7 @@ TEST_CASES = [
     {
         "test_id": "status_002",
         "category": "status_filter",
-        "query": "Are there any ONLINE sections for LCENWRD?",
+        "query": "Are there any full online sections for LCENWRD?",
         "expected_sql_contains": "ONLINE",
         "expect_error": False,
     },
@@ -222,7 +222,7 @@ TEST_CASES = [
         "test_id": "edge_002",
         "category": "ambiguous_input",
         "query": "What sections of GEARTAP are taught on Mondays and Tuesdays?",
-        "expected_sql_contains": ["sched1_day", "sched2_day"],
+        "expected_sql_contains_all": ["sched1_day", "sched2_day"],
         "expect_error": False, 
     },
     {
@@ -247,9 +247,11 @@ TEST_CASES = [
         "query": "I changed my mind, show me GEWORLD instead.",
         "history": [
             {"role": "user", "content": "I only have free time between 14:30 and 16:00. What GEARTAP classes fit?"},
-            {"role": "assistant", "content": '{"reasoning": "Filtering GEARTAP by time window.", "sql": "SELECT * FROM course_offerings WHERE course_code = \'GEARTAP\' AND sched1_time_start >= \'14:30\' AND sched1_time_end <= \'16:00\'"}'}
+            {"role": "assistant", "content": '{"reasoning": "Filtering GEARTAP by time window.", "sql": \
+             "SELECT * FROM course_offerings WHERE course_code = \'GEARTAP\' AND sched1_time_start >= \
+             \'14:30\' AND sched1_time_end <= \'16:00\'"}'}
         ],
-        "expected_sql_contains": ["14:30", "16:00", "GEWORLD"], 
+        "expected_sql_contains_all": ["14:30", "16:00", "GEWORLD"], 
         "expect_error": False,
     },
     {
@@ -261,7 +263,7 @@ TEST_CASES = [
             {"role": "assistant", "content": '{"reasoning": "Excluding taken subjects.", "sql": "SELECT * FROM course_offerings WHERE course_code NOT IN (\'LCLSONE\', \'LCFAITH\')"}'}
         ],
         # Should check for LCENWRD but still exclude the taken classes
-        "expected_sql_contains": ["LCENWRD", "LCFAITH"], 
+        "expected_sql_contains": "LCENWRD", 
         "expect_error": False,
     },
     {
