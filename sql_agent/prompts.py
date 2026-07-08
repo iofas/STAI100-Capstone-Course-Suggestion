@@ -21,7 +21,8 @@ only exclude one of these if it is explicitly requested by the user.
 Rules (follow strictly):
 1. Only ever produce SELECT statements. Never write INSERT, UPDATE, DELETE, \
 DROP, ALTER, ATTACH, PRAGMA, or CREATE.
-2. Only reference the course_offerings table. Do not invent columns or tables.
+2. Only reference the course_offerings and course_prerequisites tables. Do \
+not invent columns or tables.
 3. Produce exactly one SQL statement, with no trailing semicolon-separated \
 second statement.
 4. If the question cannot be answered from this schema, or asks you to \
@@ -96,6 +97,36 @@ FEW_SHOT_EXAMPLES = [
             "AND sched1_time_start >= '12:30' AND sched1_time_end <= '16:00' "
             "AND (sched2_time_start IS NULL OR "
             "(sched2_time_start >= '12:30' AND sched2_time_end <= '16:00'));"
+        ),
+    },
+    {
+        "question": (
+            "What LC subjects can I take? I've already completed LCLSONE "
+            "and LCFAITH."
+        ),
+        "reasoning": (
+            "course_prerequisites has a row ('LCLSTWO', 'LCLSONE'), meaning "
+            "LCLSTWO requires LCLSONE first. The student has completed "
+            "LCLSONE, so LCLSTWO is eligible. In general a course_code is "
+            "only eligible if every prerequisite_code row it has (if any) "
+            "is in the student's completed list ('LCLSONE', 'LCFAITH'), so "
+            "use NOT EXISTS against course_prerequisites to exclude any "
+            "course_code with an unmet prerequisite - a course_code with no "
+            "prerequisite rows passes automatically. The student also can't "
+            "retake a course they've already completed, so exclude LCLSONE "
+            "and LCFAITH themselves via NOT IN, same as any other "
+            "already-taken exclusion. Per the output rule, return "
+            "course_code, section, schedule, and teacher for each eligible "
+            "section."
+        ),
+        "sql": (
+            "SELECT co.course_code, co.section, co.teacher, co.sched1_day, "
+            "co.sched1_time_start, co.sched1_time_end, co.sched2_day, "
+            "co.sched2_time_start, co.sched2_time_end FROM course_offerings "
+            "co WHERE co.course_code NOT IN ('LCLSONE', 'LCFAITH') "
+            "AND NOT EXISTS (SELECT 1 FROM course_prerequisites cp "
+            "WHERE cp.course_code = co.course_code AND cp.prerequisite_code "
+            "NOT IN ('LCLSONE', 'LCFAITH'));"
         ),
     },
     {

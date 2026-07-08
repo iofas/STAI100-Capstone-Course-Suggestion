@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from .config import DB_PATH
 
 TABLE_NAME = "course_offerings"
+PREREQUISITES_TABLE_NAME = "course_prerequisites"
 
 
 @contextmanager
@@ -22,6 +23,22 @@ def get_connection():
         conn.close()
 
 
+def _describe_table(conn, table_name: str) -> list[str]:
+    cur = conn.execute(f"PRAGMA table_info({table_name})")
+    columns = cur.fetchall()
+    if not columns:
+        raise RuntimeError(
+            f"Table '{table_name}' not found in {DB_PATH}. Did you load "
+            f"course_offerings_inserts.sql into this database file?"
+        )
+
+    lines = [f"Table: {table_name}", "Columns:"]
+    for col in columns:
+        nullable = "" if col["notnull"] or col["pk"] else " (nullable)"
+        lines.append(f"  - {col['name']} {col['type']}{nullable}")
+    return lines
+
+
 def get_schema_description() -> str:
     """
     Human-readable schema description fed to the LLM as grounding context.
@@ -29,19 +46,9 @@ def get_schema_description() -> str:
     prompt always matches whatever is actually in course_offerings.db.
     """
     with get_connection() as conn:
-        cur = conn.execute(f"PRAGMA table_info({TABLE_NAME})")
-        columns = cur.fetchall()
-
-    if not columns:
-        raise RuntimeError(
-            f"Table '{TABLE_NAME}' not found in {DB_PATH}. Did you load "
-            f"course_offerings_inserts.sql into this database file?"
-        )
-
-    lines = [f"Table: {TABLE_NAME}", "Columns:"]
-    for col in columns:
-        nullable = "" if col["notnull"] or col["pk"] else " (nullable)"
-        lines.append(f"  - {col['name']} {col['type']}{nullable}")
+        lines = _describe_table(conn, TABLE_NAME)
+        lines.append("")
+        lines.extend(_describe_table(conn, PREREQUISITES_TABLE_NAME))
 
     lines.append("")
     lines.append(
@@ -63,6 +70,15 @@ def get_schema_description() -> str:
         "12:30 and 16:00'), a section only fits if ALL of its meetings are "
         "fully contained in that window - check sched1_time_start/"
         "sched1_time_end AND, when sched2_time_start is not NULL, also "
-        "sched2_time_start/sched2_time_end, not just the first meeting."
+        "sched2_time_start/sched2_time_end, not just the first meeting. "
+        "course_prerequisites records hard prerequisites: a row means "
+        "course_code cannot be taken until prerequisite_code is completed. "
+        "A course_code with no row in course_prerequisites has no "
+        "prerequisite and is always eligible on that basis. When the "
+        "student states which courses they have already completed, a "
+        "course_code is only eligible to suggest if every one of its "
+        "prerequisite_code rows is in that completed list - use NOT EXISTS "
+        "against course_prerequisites to enforce this, not just NOT IN "
+        "against the completed list on its own."
     )
     return "\n".join(lines)

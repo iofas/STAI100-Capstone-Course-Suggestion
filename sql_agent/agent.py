@@ -14,7 +14,7 @@ from .config import (
     DEEPSEEK_TIMEOUT_SECONDS,
     require_api_key,
 )
-from .db import TABLE_NAME, get_connection, get_schema_description
+from .db import PREREQUISITES_TABLE_NAME, TABLE_NAME, get_connection, get_schema_description
 from .monitoring import setup_tracing
 from .prompts import build_messages
 
@@ -40,13 +40,21 @@ _FORBIDDEN_KEYWORDS = re.compile(
     r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|ATTACH|DETACH|PRAGMA|CREATE|REPLACE|VACUUM)\b",
     re.IGNORECASE,
 )
+_TABLE_REF_PATTERN = re.compile(r"\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)", re.IGNORECASE)
+# Old-style comma joins (FROM a, b) would let a table slip past _TABLE_REF_PATTERN
+# uncaptured, since it only looks at the identifier right after FROM/JOIN.
+_COMMA_JOIN_PATTERN = re.compile(r"\bFROM\s+[a-zA-Z_][a-zA-Z0-9_]*\s*,", re.IGNORECASE)
+_ALLOWED_TABLES = {TABLE_NAME.lower(), PREREQUISITES_TABLE_NAME.lower()}
 
 def _is_safe_select(sql: str) -> bool:
     if not sql or sql.upper() == "NONE": return False
     if _FORBIDDEN_KEYWORDS.search(sql): return False
     body = sql.strip().strip(";")
     if ";" in body or not body.upper().startswith("SELECT"): return False
-    if TABLE_NAME not in body: return False
+    if _COMMA_JOIN_PATTERN.search(body): return False
+    referenced_tables = {t.lower() for t in _TABLE_REF_PATTERN.findall(body)}
+    if TABLE_NAME.lower() not in referenced_tables: return False
+    if not referenced_tables.issubset(_ALLOWED_TABLES): return False
     return True
 
 def generate_sql(question: str, history: list[dict] = None) -> dict:
