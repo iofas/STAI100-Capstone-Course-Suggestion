@@ -19,16 +19,16 @@ regardless of which 8 are chosen: **Prompt Engineering**, **Chat UI**,
 
 | Module | Description | Owner | Status |
 |---|---|---|---|
-| Prompt Engineering | Design and iterate on system prompts; few-shot, chain-of-thought, structured prompt patterns | bea | In progress (see `sql_agent/prompts.py`) |
-| Structured Outputs | Return typed, schema-validated responses (JSON, Pydantic, etc.) | jp | **Working** (see `sql_agent/agent.py`) |
+| Prompt Engineering | System prompt grounded in the live SQLite schema, 7 few-shot examples showing the reasoning-then-SQL pattern (including a rejected DELETE example), strict two-key JSON output contract | bea | **Working** (see `sql_agent/prompts.py`) |
+| Structured Outputs | Pydantic validates both the LLM's own JSON output (`AgentOutput`: reasoning + sql) and the API's request/response shapes (`AskRequest`/`AskResponse`) | jp | **Working** (see `sql_agent/agent.py`, `api.py`) |
 | Disambiguation | Detect ambiguous inputs and clarify intent before proceeding | — | Not started |
-| RAG | Retrieve relevant context from a vector/SQL/graph store to ground responses | bea | Not started |
-| Memory | Short-term session memory and/or long-term persistent memory | jp | **Working** (see `demo_sql_agent.py` & `api.py`) |
-| Guardrails | Input/output validation, topic filtering, safety checks | — | Not started |
-| ReAct Agent | Reasoning + acting loop, iterative planning and execution | — | Not started |
-| SQL Agent | Generate and execute SQL against a relational DB from natural language | bea | **Working** (see `sql_agent/`) |
-| Tool Use | Integrate at least one external tool/API | — | Not started |
-| Chat UI | Conversational interface (e.g. Streamlit, Gradio) | kean | Not started |
+| RAG | Retrieve relevant context from a vector/SQL/graph store to ground responses | bea | Not started (schema grounding via `get_schema_description()` is used instead of retrieval) |
+| Memory | Short-term, per-conversation memory only: `{role, content}` history list passed back and forth on every request; no persistent/long-term storage across sessions | jp | **Working** (see `demo_sql_agent.py`, `api.py`, `chat_ui.py`) |
+| Guardrails | Regex-based safety checks block INSERT/UPDATE/DELETE/DROP/etc., enforce a single SELECT statement, block comma joins, and restrict table references to `course_offerings`/`course_prerequisites`; SQLite connection also opened in read-only (`PRAGMA query_only`) as defense-in-depth | — | **Working** (see `sql_agent/agent.py` `_is_safe_select`, `sql_agent/db.py`) |
+| ReAct Agent | Reasoning + acting loop, iterative planning and execution | — | Not started (single-shot generate-then-execute; DeepSeek never sees query results or retries, no tool-calling loop) |
+| SQL Agent | Generate and execute SQL against a SQLite database from natural language | bea | **Working** (see `sql_agent/`) |
+| Tool Use | Integrate at least one external tool/API | — | Not started (no function/tool calling - DeepSeek only returns JSON text, `sql_agent.ask()` executes SQL itself afterward) |
+| Chat UI | Streamlit conversational interface that calls the API over HTTP (does not import `sql_agent` directly) | kean | **Working** (see `chat_ui.py`) |
 | API Endpoint | Expose the agent via a REST API | gideon | **Working** (see `api.py`) |
-| LLMOps Monitoring | Log traces, latency, token usage, errors (e.g. MLflow) | gideon | **Working** (see `sql_agent/monitoring.py`) |
-| Dockerization | Package the app in a Dockerfile with build/run docs | kean | Not started |
+| LLMOps Monitoring | MLflow tracing: `mlflow.openai.autolog()` captures every DeepSeek call's latency/tokens automatically, and a manual `@mlflow.trace` span around `ask()` adds guardrail-rejection/error/row-count attributes | gideon | **Working** (see `sql_agent/monitoring.py`) |
+| Dockerization | Single `python:3.12-slim` image shared by `api`/`chatui` (different `command:` per service) plus a `mlflow` service, orchestrated via `docker-compose.yml` | kean | **Working** (see `Dockerfile`, `docker-compose.yml`) |
