@@ -73,6 +73,56 @@ curl -X POST http://localhost:8000/ask \
 back as a normal 200 with `error` populated; only a genuine upstream
 failure (DeepSeek unreachable/timed out) returns a 502.
 
+### Chat UI
+
+A Streamlit front-end that talks to the API above over HTTP (it does not
+import `sql_agent` directly). Start the API first, then in a separate
+terminal:
+
+```bash
+streamlit run chat_ui.py
+```
+
+Open http://localhost:8501. The sidebar shows whether it can reach the API
+and lets you clear the conversation. By default it talks to
+`http://localhost:8000`; point it elsewhere by setting `API_URL` before
+running it, e.g. `API_URL=http://some-host:8000 streamlit run chat_ui.py`.
+
+## Docker
+
+Everything above (MLflow, API, Chat UI) can also be run together with
+Docker Compose instead of three separate terminals:
+
+```bash
+cp .env.example .env   # then edit .env and add your DEEPSEEK_API_KEY
+docker compose up --build
+```
+
+This starts three containers, all built from the same image
+(`python:3.12-slim`), differing only in which command they run:
+
+| Service  | Container            | Port   | Runs                                          |
+|----------|-----------------------|--------|-----------------------------------------------|
+| `mlflow` | `course-agent-mlflow` | `5000` | MLflow tracking server                        |
+| `api`    | `course-agent-api`    | `8000` | `uvicorn api:app`                             |
+| `chatui` | `course-agent-chatui` | `8501` | `streamlit run chat_ui.py`                    |
+
+Then open http://localhost:8501 for the Chat UI, http://localhost:8000/docs
+for the API, and http://localhost:5000 for MLflow traces - same as running
+everything locally, just containerized.
+
+A few things worth knowing:
+- `course_offerings.db` must already exist (built via the Setup steps above)
+  before running `docker compose up` - it's mounted read-only into the `api`
+  container rather than baked into the image, since it's data, not code.
+- The `api` container's `MLFLOW_TRACKING_URI` is overridden to
+  `http://mlflow:5000` (the `mlflow` service's Docker network name), not
+  `localhost`, since each container has its own `localhost`.
+- To stop everything: `docker compose down` (add `-v` to also drop the
+  `mlflow_data` volume, which wipes MLflow's stored traces/experiments).
+- To rebuild after changing code or dependencies: `docker compose up --build`
+  again.
+
 ## Repo structure
 
 ```
@@ -87,10 +137,13 @@ sql_agent/
   agent.py                        ask(question) -> generated SQL -> guardrails -> execution
 demo_sql_agent.py                  CLI to try the SQL Agent
 api.py                             REST API (FastAPI) wrapping sql_agent.ask()
+chat_ui.py                         Streamlit Chat UI, calls the API over HTTP
 test_cases.py                      30+ predefined test cases across 8 categories
 test_agent.py                      pytest runner evaluating the SQL agent
 requirements.txt
 .env.example                       copy to .env and fill in your DeepSeek API key
+Dockerfile                         single image shared by the api/chatui containers
+docker-compose.yml                 runs mlflow + api + chatui together
 ```
 
 ## Dataset
