@@ -59,6 +59,22 @@ st.markdown(
     .badge-reasoning { background: #ede9fe; color: #6d28d9; }
     .badge-sql       { background: #dbeafe; color: #1d4ed8; }
     .badge-results   { background: #dcfce7; color: #15803d; }
+    .badge-schedule  { background: #fef3c7; color: #b45309; }
+    .badge-verified  { background: #dcfce7; color: #15803d; }
+    .filter-guide {
+        background: #f0fdf4;
+        border: 1px solid #bbf7d0;
+        border-radius: 10px;
+        padding: 0.8rem 0.9rem;
+        font-size: 0.86rem;
+        line-height: 1.35rem;
+    }
+    .filter-guide code {
+        background: #dcfce7;
+        color: #14532d;
+        padding: 0 0.25rem;
+        border-radius: 4px;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -87,11 +103,46 @@ with st.sidebar:
         st.session_state.history = []
         st.rerun()
 
+    st.divider()
+    st.subheader("🗓️ Build a schedule")
+    st.caption(
+        "Just describe the schedule you want in the chat - there's no form. "
+        "A deterministic optimizer builds a verified, conflict-free timetable "
+        "(and tells you what it relaxed if your request is over-tight)."
+    )
+    st.markdown(
+        """
+        <div class="filter-guide">
+        Feel free to ask the model to <b>filter / shape your schedule</b> by:
+        <ul style="margin:0.4rem 0 0 -0.6rem; padding-left:1rem;">
+          <li><b>Which subjects</b> — name them (<code>GEARTAP, GEWORLD, LCFAITH</code>)
+              or ask for a number (<code>"give me 4 GE subjects"</code>).</li>
+          <li><b>Class start / end time</b> — <code>"nothing before 9am or after 3pm"</code>.</li>
+          <li><b>Timeslot window</b> — <code>"only classes between 12:30 and 16:00"</code>.</li>
+          <li><b>Days on campus</b> — <code>"only Mondays and Wednesdays"</code>,
+              <code>"keep me to 3 days a week"</code>.</li>
+          <li><b>Max classes per day</b> — <code>"no more than 2 classes in one day"</code>.</li>
+          <li><b>Minimize time at school / no gaps</b> —
+              <code>"pack my days, I hate gaps"</code>.</li>
+          <li><b>Already taken / prerequisites</b> —
+              <code>"I've already passed LCLSONE and GEUSELF"</code>
+              (excluded, and prereqs enforced).</li>
+        </ul>
+        <div style="margin-top:0.5rem; color:#166534;">
+          Combine any of these in one sentence — e.g.
+          <code>"Build me a compact schedule of 4 subjects, Mon/Wed only,
+          nothing after 4pm, max 2 a day."</code>
+        </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 st.markdown(
     """
     <div class="agent-banner">
         <h1>🎓 DLSU Course Suggestion Agent</h1>
-        <p>Ask about GE/elective sections - schedules, teachers, prerequisites - in plain language.</p>
+        <p>Ask about GE/elective sections, or have it <b>build you a conflict-free schedule</b> - in plain language.</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -102,11 +153,41 @@ if "messages" not in st.session_state:
 if "history" not in st.session_state:
     st.session_state.history = []  # raw {role, content} history sent to the API
 
+
+def render_schedule_extras(msg: dict) -> None:
+    """Render the scheduler's negotiation trace + correctness check, if any."""
+    if msg.get("mode") != "schedule":
+        return
+    relaxations = msg.get("relaxations") or []
+    dropped = msg.get("dropped_courses") or []
+    if relaxations:
+        st.warning(
+            "Constraints relaxed to reach a valid schedule:\n"
+            + "\n".join(f"- {r}" for r in relaxations)
+        )
+    if dropped:
+        st.error("Couldn't fit: " + ", ".join(dropped))
+    criteria = msg.get("criteria") or {}
+    if criteria.get("correct"):
+        st.markdown(
+            '<span class="badge badge-verified">✓ Verified</span>',
+            unsafe_allow_html=True,
+        )
+        st.caption(
+            "No time conflicts (C1), no duplicate courses (C2), every section "
+            "exists in the catalog (C3), only requested courses (C4), all hard "
+            "constraints hold (C5)."
+        )
+
 # --- Render existing conversation ---------------------------------------
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
+        is_schedule = msg.get("mode") == "schedule"
         if msg["role"] == "assistant" and msg["content"]:
-            st.markdown('<span class="badge badge-reasoning">Reasoning</span>', unsafe_allow_html=True)
+            if is_schedule:
+                st.markdown('<span class="badge badge-schedule">Schedule</span>', unsafe_allow_html=True)
+            else:
+                st.markdown('<span class="badge badge-reasoning">Reasoning</span>', unsafe_allow_html=True)
         st.markdown(msg["content"])
         if msg.get("sql"):
             st.markdown('<span class="badge badge-sql">SQL</span>', unsafe_allow_html=True)
@@ -114,13 +195,17 @@ for msg in st.session_state.messages:
                 st.code(msg["sql"], language="sql")
         rows = msg.get("rows")
         if rows:
-            st.markdown('<span class="badge badge-results">Results</span>', unsafe_allow_html=True)
+            label = "Your schedule" if is_schedule else "Results"
+            st.markdown(f'<span class="badge badge-results">{label}</span>', unsafe_allow_html=True)
             st.dataframe(rows, use_container_width=True)
         elif rows is not None:
             st.info("No matching sections found.")
+        render_schedule_extras(msg)
 
 # --- Handle new input -----------------------------------------------------
-question = st.chat_input("e.g. What GE subjects can I take between 12:30pm and 4pm?")
+question = st.chat_input(
+    "e.g. Build me a compact schedule of GEARTAP, GEWORLD and LCFAITH before 3pm"
+)
 
 if question:
     st.session_state.messages.append({"role": "user", "content": question})
@@ -144,11 +229,15 @@ if question:
         if data is not None:
             reply_text = data.get("reasoning") or ""
             error = data.get("error")
+            is_schedule = data.get("mode") == "schedule"
 
             if error:
                 st.warning(error)
             if reply_text:
-                st.markdown('<span class="badge badge-reasoning">Reasoning</span>', unsafe_allow_html=True)
+                if is_schedule:
+                    st.markdown('<span class="badge badge-schedule">Schedule</span>', unsafe_allow_html=True)
+                else:
+                    st.markdown('<span class="badge badge-reasoning">Reasoning</span>', unsafe_allow_html=True)
                 st.markdown(reply_text)
 
             sql = data.get("sql")
@@ -159,17 +248,22 @@ if question:
 
             rows = data.get("rows")
             if rows:
-                st.markdown('<span class="badge badge-results">Results</span>', unsafe_allow_html=True)
+                label = "Your schedule" if is_schedule else "Results"
+                st.markdown(f'<span class="badge badge-results">{label}</span>', unsafe_allow_html=True)
                 st.dataframe(rows, use_container_width=True)
             elif rows is not None:
                 st.info("No matching sections found.")
 
-            st.session_state.messages.append(
-                {
-                    "role": "assistant",
-                    "content": reply_text or (error or "(no response)"),
-                    "sql": sql,
-                    "rows": rows,
-                }
-            )
+            assistant_msg = {
+                "role": "assistant",
+                "content": reply_text or (error or "(no response)"),
+                "sql": sql,
+                "rows": rows,
+                "mode": data.get("mode", "lookup"),
+                "relaxations": data.get("relaxations", []),
+                "dropped_courses": data.get("dropped_courses", []),
+                "criteria": data.get("criteria"),
+            }
+            render_schedule_extras(assistant_msg)
+            st.session_state.messages.append(assistant_msg)
             st.session_state.history = data.get("updated_history", st.session_state.history)

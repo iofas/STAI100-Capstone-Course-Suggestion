@@ -22,15 +22,17 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from sql_agent import ask
+from sql_agent import respond
 
 app = FastAPI(
     title="STAI100 Course Suggestion Agent API",
     description=(
-        "Translates a natural-language question about DLSU GE/elective "
-        "course offerings into SQL and returns the matching sections."
+        "Answers natural-language questions about DLSU GE/elective course "
+        "offerings. Plain lookups are translated to SQL; requests to build a "
+        "timetable are routed to a deterministic ILP scheduler that returns a "
+        "verified, conflict-free schedule (and negotiates when over-constrained)."
     ),
-    version="0.1.0",
+    version="0.2.0",
 )
 
 # Wide-open CORS so a Chat UI module (e.g. Streamlit/Gradio, likely running
@@ -60,10 +62,15 @@ class AskRequest(BaseModel):
 class AskResponse(BaseModel):
     question: str
     reasoning: str
-    sql: str
+    sql: Optional[str] = None
     rows: Optional[list[dict[str, Any]]] = None
     error: Optional[str] = None
     updated_history: list[Message]
+    # Scheduling path extras (null/empty for plain lookups):
+    mode: str = "lookup"                         # "lookup" | "schedule"
+    relaxations: list[str] = []                  # constraints the agent loosened
+    dropped_courses: list[str] = []              # courses it couldn't fit
+    criteria: Optional[dict[str, Any]] = None    # C1-C6 correctness check
 
 
 @app.get("/health")
@@ -75,22 +82,26 @@ def health() -> dict:
 @app.post("/ask", response_model=AskResponse)
 def ask_endpoint(payload: AskRequest) -> dict:
     """
-    Ask the SQL Agent a natural-language question and get matching course
-    sections back.
+    Ask the agent a natural-language question.
 
-    Guardrail rejections and SQL execution failures are NOT HTTP errors -
-    they come back as a normal 200 response with `error` populated and
-    `rows: null`, same contract as `sql_agent.ask()` itself, so a Chat UI
-    can render them inline. Only genuine upstream failures (e.g. the
-    DeepSeek call itself erroring out or timing out) raise a 502.
+    The agent routes the message: a request to BUILD A TIMETABLE goes to the
+    deterministic ILP scheduler (returns a verified, conflict-free schedule in
+    `rows`, with any `relaxations`/`dropped_courses` it negotiated and the
+    `criteria` correctness check); anything else is a plain lookup translated
+    to `sql`.
+
+    Guardrail rejections and SQL execution failures are NOT HTTP errors - they
+    come back as a normal 200 response with `error` populated. Only genuine
+    upstream failures (e.g. the DeepSeek call erroring out or timing out) raise
+    a 502.
     """
     history_dicts = [{"role": msg.role, "content": msg.content} for msg in payload.history]
 
     try:
-        result = ask(payload.question, history=history_dicts)
+        result = respond(payload.question, history=history_dicts)
     except Exception as exc:  # e.g. DeepSeek timeout/auth/network failure
         raise HTTPException(
-            status_code=502, detail=f"SQL Agent upstream call failed: {exc}"
+            status_code=502, detail=f"Agent upstream call failed: {exc}"
         ) from exc
 
     # Append current exchange to send back to frontend
@@ -102,8 +113,12 @@ def ask_endpoint(payload: AskRequest) -> dict:
     return {
         "question": result["question"],
         "reasoning": result["reasoning"],
-        "sql": result["sql"],
+        "sql": result.get("sql"),
         "rows": result["rows"],
         "error": result["error"],
-        "updated_history": new_history
+        "updated_history": new_history,
+        "mode": result.get("mode", "lookup"),
+        "relaxations": result.get("relaxations", []),
+        "dropped_courses": result.get("dropped_courses", []),
+        "criteria": result.get("criteria"),
     }

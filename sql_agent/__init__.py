@@ -13,5 +13,6 @@ _os.environ.setdefault("MLFLOW_HTTP_REQUEST_TIMEOUT", "5")
 _os.environ.setdefault("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "1")
 
 from .agent import ask, generate_sql, run_query
+from .schedule_agent import respond, suggest_schedule
 
-__all__ = ["ask", "generate_sql", "run_query"]
+__all__ = ["ask", "generate_sql", "run_query", "respond", "suggest_schedule"]
