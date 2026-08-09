@@ -15,6 +15,16 @@ PREREQUISITES_TABLE_NAME = "course_prerequisites"
 
 @contextmanager
 def get_connection():
+    """Yield a read-only SQLite connection to course_offerings.db.
+
+    A context manager: the connection is opened with row access by column name
+    (``sqlite3.Row``) and put into ``PRAGMA query_only`` mode so no statement
+    run through it can modify the database, then closed on exit.
+
+    Yields:
+        sqlite3.Connection: A configured, read-only connection. Use it inside a
+        ``with get_connection() as conn:`` block.
+    """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     # Defense-in-depth: reject any write at the SQLite engine level, so a bug
@@ -28,6 +38,19 @@ def get_connection():
 
 
 def _describe_table(conn, table_name: str) -> list[str]:
+    """Introspect one table into human-readable schema lines.
+
+    Args:
+        conn: An open SQLite connection (from `get_connection`).
+        table_name: The table to describe.
+
+    Returns:
+        Lines naming the table and each column (with type and a "(nullable)"
+        marker), suitable for feeding to the LLM as schema context.
+
+    Raises:
+        RuntimeError: If the table does not exist in the database.
+    """
     cur = conn.execute(f"PRAGMA table_info({table_name})")
     columns = cur.fetchall()
     if not columns:

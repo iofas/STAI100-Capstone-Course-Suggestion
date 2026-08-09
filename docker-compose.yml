@@ -11,7 +11,7 @@ services:
   api:
     build: .
     container_name: course-agent-api
-    command: uvicorn api:app --host 0.0.0.0 --port 8000
+    command: uvicorn apps.api:app --host 0.0.0.0 --port 8000
     ports:
       - "8000:8000"
     env_file:
@@ -30,7 +30,7 @@ services:
   chatui:
     build: .
     container_name: course-agent-chatui
-    command: streamlit run chat_ui.py --server.address 0.0.0.0 --server.port 8501
+    command: streamlit run apps/chat_ui.py --server.address 0.0.0.0 --server.port 8501
     ports:
       - "8501:8501"
     environment:

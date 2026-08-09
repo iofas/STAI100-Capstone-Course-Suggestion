@@ -27,6 +27,15 @@ class AgentOutput(BaseModel):
     sql: str
 
 def _get_client() -> OpenAI:
+    """Return a lazily-created, process-wide OpenAI client pointed at DeepSeek.
+
+    The client is built on first use (so importing this module doesn't require
+    an API key) and cached in the module-level `_client` for reuse.
+
+    Returns:
+        A configured `openai.OpenAI` instance (DeepSeek base URL, API key from
+        the environment, request timeout from config).
+    """
     global _client
     if _client is None:
         _client = OpenAI(
@@ -47,6 +56,21 @@ _COMMA_JOIN_PATTERN = re.compile(r"\bFROM\s+[a-zA-Z_][a-zA-Z0-9_]*\s*,", re.IGNO
 _ALLOWED_TABLES = {TABLE_NAME.lower(), PREREQUISITES_TABLE_NAME.lower()}
 
 def _is_safe_select(sql: str) -> bool:
+    """Guardrail: decide whether a generated SQL string is safe to execute.
+
+    A statement is considered safe only if it is a single, read-only SELECT
+    that touches nothing but the whitelisted tables. Everything else (writes,
+    schema changes, multiple statements, comma-joins that could smuggle in an
+    unlisted table, or references to tables outside the whitelist) is rejected.
+
+    Args:
+        sql: The raw SQL string produced by the LLM. May be empty or the
+            sentinel "NONE" when the model declined to answer.
+
+    Returns:
+        True if `sql` is a single read-only SELECT against only the allowed
+        tables (see `_ALLOWED_TABLES`); False otherwise.
+    """
     if not sql or sql.upper() == "NONE": return False
     if _FORBIDDEN_KEYWORDS.search(sql): return False
     body = sql.strip().strip(";")
@@ -58,6 +82,30 @@ def _is_safe_select(sql: str) -> bool:
     return True
 
 def generate_sql(question: str, history: list[dict] = None) -> dict:
+    """Ask the LLM to translate a natural-language question into SQL.
+
+    Builds the prompt (system prompt + schema + few-shot examples + prior
+    turns), calls DeepSeek with deterministic settings (temperature=0, forced
+    JSON output), and validates the reply into a reasoning/SQL pair. This does
+    NOT run any guardrail check or execute the query - see `ask()` for that.
+
+    Args:
+        question: The student's natural-language question, e.g.
+            "What sections of GEARTAP are on Mondays?".
+        history: Optional prior conversation as a list of
+            ``{"role": "user"|"assistant", "content": str}`` messages, used to
+            resolve follow-ups ("show me GEWORLD instead"). Pass None (the
+            default) or an empty list for a fresh, single-turn question.
+
+    Returns:
+        A dict with keys:
+            - ``question``: the original question, echoed back.
+            - ``reasoning``: the model's stated reasoning for the SQL.
+            - ``sql``: the generated SELECT, or the sentinel ``"NONE"`` when
+              the model declined or the JSON reply failed validation.
+            - ``raw_response``: the unparsed JSON string from the model, kept
+              for debugging/tracing.
+    """
     schema = get_schema_description()
     messages = build_messages(schema, question, history)
 
@@ -87,6 +135,21 @@ def generate_sql(question: str, history: list[dict] = None) -> dict:
     return {"question": question, "reasoning": reasoning, "sql": sql, "raw_response": raw}
 
 def run_query(sql: str) -> list[dict]:
+    """Execute an already-safety-checked SELECT and return the rows.
+
+    Callers are responsible for validating `sql` with `_is_safe_select()`
+    first; this function runs whatever it is given.
+
+    Args:
+        sql: A read-only SELECT statement to run against course_offerings.db.
+
+    Returns:
+        The result set as a list of dicts (one per row, column name -> value).
+
+    Raises:
+        sqlite3.Error: If the SQL is invalid or execution otherwise fails; the
+            caller (`ask()`) catches this and surfaces it in the result.
+    """
     with get_connection() as conn:
         cur = conn.execute(sql)
         return [dict(row) for row in cur.fetchall()]
@@ -94,14 +157,29 @@ def run_query(sql: str) -> list[dict]:
 @mlflow.trace(name="sql_agent.ask", span_type="AGENT")
 def ask(question: str, history: list[dict] = None) -> dict:
     """
-    End-to-end entry point: question (+ optional history) -> generated SQL -> 
-    guardrail check -> execution -> structured result. This is the function 
+    End-to-end entry point: question (+ optional history) -> generated SQL ->
+    guardrail check -> execution -> structured result. This is the function
     other modules (Chat UI, API endpoint) should import and call.
 
     Wrapped in an MLflow trace so every call - including the nested LLM
     call captured by mlflow.openai.autolog() - is logged with latency,
     token usage, and (via the span attributes below) guardrail rejections,
     SQL execution errors, and row counts.
+
+    Args:
+        question: The student's natural-language question.
+        history: Optional prior conversation as a list of
+            ``{"role", "content"}`` messages for follow-up context. Defaults
+            to None (treated as a fresh, single-turn question).
+
+    Returns:
+        The dict from `generate_sql()` (``question``/``reasoning``/``sql``/
+        ``raw_response``) plus two more keys describing the outcome:
+            - ``rows``: the executed query's rows on success; ``[]`` when the
+              question was unanswerable (sql == "NONE"); ``None`` when the SQL
+              was rejected by the guardrail or failed to execute.
+            - ``error``: None on success/unanswerable, or a human-readable
+              message when the guardrail rejected the SQL or execution failed.
     """
     span = mlflow.get_current_active_span()
     

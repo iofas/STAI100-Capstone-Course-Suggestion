@@ -25,6 +25,15 @@ COLUMNS = [
 
 
 def load_rows(path: Path) -> list[dict]:
+    """Load scraped offering rows from a ``.json`` or ``.csv`` file.
+
+    Args:
+        path: Path to the input file. A ``.json`` suffix is parsed as JSON;
+            anything else is read as CSV with a header row.
+
+    Returns:
+        The rows as a list of dicts (column name -> value).
+    """
     if path.suffix.lower() == ".json":
         return json.loads(path.read_text(encoding="utf-8"))
     with path.open(encoding="utf-8") as f:
@@ -32,6 +41,15 @@ def load_rows(path: Path) -> list[dict]:
 
 
 def norm(v):
+    """Normalise an empty cell to SQL NULL.
+
+    Args:
+        v: A raw cell value (typically a string from CSV/JSON).
+
+    Returns:
+        None if `v` is an empty string or None, otherwise `v` unchanged - so
+        blank cells land in the DB as NULL rather than ``''``.
+    """
     return None if v in ("", None) else v
 
 

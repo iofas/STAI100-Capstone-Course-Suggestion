@@ -62,9 +62,23 @@ def _valid_course_codes() -> list[str]:
 
 
 def extract_constraints(question: str, history: list[dict] = None):
-    """One LLM call: natural language -> (_ConstraintModel, raw_json_string).
+    """One LLM call: natural language -> structured scheduling constraints.
 
-    This is the only place the model is involved in the scheduling path.
+    This is the ONLY place the model is involved in the scheduling path - it
+    translates the request into a constraint object and also decides whether the
+    message is a schedule request at all. It never produces a timetable.
+
+    Args:
+        question: The student's natural-language message.
+        history: Optional prior conversation as ``{"role", "content"}``
+            messages, so follow-ups ("actually, before 3pm") resolve in
+            context. Defaults to None.
+
+    Returns:
+        A 2-tuple ``(parsed, raw)`` where ``parsed`` is a ``_ConstraintModel``
+        (its ``is_schedule_request`` flag tells the router which path to take)
+        and ``raw`` is the model's unparsed JSON reply, kept for tracing. On a
+        validation error, ``parsed`` falls back to a non-schedule result.
     """
     from .schedule_prompts import build_constraint_messages
 
@@ -89,6 +103,15 @@ def extract_constraints(question: str, history: list[dict] = None):
 # Rendering the result as a human-readable, honest explanation
 # --------------------------------------------------------------------------- #
 def _fmt_meetings(section: Section) -> str:
+    """Format a section's meetings for display.
+
+    Args:
+        section: The section whose meetings to render.
+
+    Returns:
+        A human-readable string like ``"Monday 09:00-10:30; Wednesday
+        09:00-10:30"`` (day names spelled out, times as ``HH:MM``).
+    """
     return "; ".join(
         f"{DAY_NAMES.get(m.day, m.day)} {minutes_to_hhmm(m.start)}-{minutes_to_hhmm(m.end)}"
         for m in section.meetings
@@ -96,7 +119,16 @@ def _fmt_meetings(section: Section) -> str:
 
 
 def _schedule_rows(result: ScheduleResult) -> list[dict]:
-    """Timetable as display rows (also what the UI dataframe renders)."""
+    """Turn a solved schedule into display rows (the UI dataframe/API ``rows``).
+
+    Args:
+        result: The solver output; only its ``chosen`` sections are rendered,
+            sorted by earliest weekday.
+
+    Returns:
+        One dict per chosen section with the columns Course, Section, Schedule,
+        Room, Teacher, and Remarks. Empty list if nothing was scheduled.
+    """
     rows = []
     for s in sorted(result.chosen, key=lambda s: (min((m.day for m in s.meetings),
                     key=lambda d: DAY_ORDER.index(d)) if s.meetings else "Z")):
@@ -113,6 +145,23 @@ def _schedule_rows(result: ScheduleResult) -> list[dict]:
 
 def _render_explanation(c: ScheduleConstraints, result: ScheduleResult,
                         report: dict) -> str:
+    """Compose the honest, human-readable explanation shown to the student.
+
+    Narrates the outcome: a clean success, or a negotiation trace listing every
+    constraint that had to be loosened and every course that had to be dropped,
+    plus the grounding guarantee when the schedule is verified correct.
+
+    Args:
+        c: The student's original constraints (used for the headline wording,
+            e.g. whether compactness was requested).
+        result: The solver output (chosen sections, relaxations, dropped
+            courses, campus minutes).
+        report: The `validate_schedule` criteria dict; its ``correct`` flag
+            gates the "verified" grounding note.
+
+    Returns:
+        A multi-line message suitable for the chat/API ``reasoning`` field.
+    """
     lines: list[str] = []
     n = len(result.chosen)
 
@@ -167,8 +216,25 @@ def suggest_schedule(question: str, history: list[dict] = None,
                      reasoning_raw: str = None) -> dict:
     """Build a schedule for a request already known to be a scheduling one.
 
-    ``constraints`` may be passed in if extraction already happened (in the
-    router) to avoid a second LLM call.
+    Runs the deterministic half of the pipeline: retrieve eligible sections,
+    solve with relaxation, validate, and render the explanation + rows. No LLM
+    call happens here when `constraints` is supplied.
+
+    Args:
+        question: The original natural-language request (echoed into output).
+        history: Optional prior conversation, only used if constraints must be
+            (re-)extracted here.
+        constraints: A pre-extracted ``_ConstraintModel`` from the router; pass
+            it to avoid a second LLM call. If None, extraction runs now.
+        reasoning_raw: The raw JSON string from extraction, carried through into
+            the ``raw_response`` field for tracing. Ignored if constraints are
+            re-extracted here.
+
+    Returns:
+        The standard result dict (``question``/``reasoning``/``sql``/``rows``/
+        ``error``/``raw_response``) plus schedule-specific fields: ``mode``
+        (``"schedule"``), ``relaxations``, ``dropped_courses``, and the C1-C6
+        ``criteria`` report.
     """
     if constraints is None:
         constraints, reasoning_raw = extract_constraints(question, history)
@@ -218,7 +284,19 @@ def respond(question: str, history: list[dict] = None) -> dict:
 
     Extraction runs once. If it's a build-a-schedule request we solve it
     deterministically (no further LLM call); otherwise we defer to the existing
-    ``ask()`` text-to-SQL lookup path, unchanged.
+    ``ask()`` text-to-SQL lookup path, unchanged. This is the function the API
+    and Chat UI call.
+
+    Args:
+        question: The student's natural-language message.
+        history: Optional prior conversation as ``{"role", "content"}``
+            messages for follow-up context. Defaults to None.
+
+    Returns:
+        The result dict from `suggest_schedule` (with ``mode == "schedule"``)
+        for scheduling requests, or from `ask` (with ``mode == "lookup"``) for
+        everything else. Both share the ``question``/``reasoning``/``sql``/
+        ``rows``/``error`` shape so callers can handle them uniformly.
     """
     span = mlflow.get_current_active_span()
     constraints, raw = extract_constraints(question, history)

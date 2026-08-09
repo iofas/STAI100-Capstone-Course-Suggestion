@@ -1,9 +1,9 @@
 """
 Quick manual test harness for the SQL Agent module.
 
-Usage:
-    python demo_sql_agent.py "What sections of GEARTAP are on Mondays?"
-    python demo_sql_agent.py            # interactive prompt loop
+Usage (from the repo root):
+    python -m examples.demo_sql_agent "What sections of GEARTAP are on Mondays?"
+    python -m examples.demo_sql_agent            # interactive prompt loop
 """
 import json
 import sys

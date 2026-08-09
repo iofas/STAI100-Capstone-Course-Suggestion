@@ -43,6 +43,15 @@ MLFLOW_EXPERIMENT_NAME = os.getenv("MLFLOW_EXPERIMENT_NAME", "sql_agent")
 
 
 def require_api_key() -> str:
+    """Return the DeepSeek API key, failing loudly if it is not configured.
+
+    Returns:
+        The value of the ``DEEPSEEK_API_KEY`` environment variable.
+
+    Raises:
+        RuntimeError: If no API key is set, with a message pointing at the
+            ``.env`` setup step.
+    """
     if not DEEPSEEK_API_KEY:
         raise RuntimeError(
             "DEEPSEEK_API_KEY is not set. Copy .env.example to .env and add "

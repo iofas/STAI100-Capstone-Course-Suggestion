@@ -1,13 +1,13 @@
 """
 Chat UI for the STAI100 Course Suggestion Agent (the "Chat UI" module).
 
-A thin Streamlit front-end over the existing REST API (api.py). It does NOT
-import sql_agent directly - it talks to the API endpoint over HTTP, the same
-way any external client would, so the API Endpoint module stays the single
-real entry point into the agent.
+A thin Streamlit front-end over the existing REST API (apps/api.py). It does
+NOT import sql_agent directly - it talks to the API endpoint over HTTP, the
+same way any external client would, so the API Endpoint module stays the
+single real entry point into the agent.
 
-Run locally (with the API already running separately):
-    streamlit run chat_ui.py
+Run locally from the repo root (with the API already running separately):
+    streamlit run apps/chat_ui.py
 
 Run in Docker: see Dockerfile / docker-compose.yml. The API_URL env var
 controls which API instance this UI talks to (defaults to localhost:8000,

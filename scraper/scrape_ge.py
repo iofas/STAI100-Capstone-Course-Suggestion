@@ -67,6 +67,16 @@ def log(msg: str) -> None:
 
 
 def read_courses(path: Path) -> list[str]:
+    """Read the list of course codes to scrape from a text file.
+
+    Args:
+        path: Path to a text file with one entry per line. Blank lines and
+            lines starting with ``#`` are ignored; each entry may be a bare
+            code (``GEWORLD``) or a full option label (``GEWORLD - THE ...``).
+
+    Returns:
+        The course codes in file order (labels reduced to just their code).
+    """
     codes: list[str] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -108,8 +118,16 @@ def resolve_target(ctx, timeout_s: int = 30):
 
     The portal may open the module in a new tab or inside an iframe, so we
     scan every page and every frame for #ddlSelectCourse rather than assuming
-    the first tab. Returns a Page or Frame (both expose the locator/evaluate
-    API the rest of the script uses), or None if not found in time.
+    the first tab.
+
+    Args:
+        ctx: The Playwright browser context whose pages/frames to search.
+        timeout_s: How long to keep polling, in seconds, before giving up.
+
+    Returns:
+        The Page or Frame containing the Course Finder (both expose the
+        locator/evaluate API the rest of the script uses), or None if it does
+        not appear within `timeout_s`.
     """
     deadline = time.time() + timeout_s
     while time.time() < deadline:
@@ -128,8 +146,19 @@ def resolve_target(ctx, timeout_s: int = 30):
 
 def wait_for_options(target, select_id: str, min_count: int = 2,
                      timeout: int = 20000) -> int:
-    """Wait until a <select> has been populated (cascading AJAX). Returns the
-    final option count (0 on timeout)."""
+    """Wait until a cascading <select> has been populated by AJAX.
+
+    Args:
+        target: The Page or Frame holding the control (from `resolve_target`).
+        select_id: The id of the ``<select>`` to watch.
+        min_count: Minimum number of ``<option>`` elements that must be present
+            before the select is considered populated (the placeholder counts,
+            so the default is 2).
+        timeout: Maximum time to wait, in milliseconds.
+
+    Returns:
+        The final number of options (0 if it never populated / on timeout).
+    """
     try:
         target.wait_for_function(
             "([id, n]) => { const s = document.getElementById(id);"
@@ -146,11 +175,19 @@ def wait_for_options(target, select_id: str, min_count: int = 2,
 
 
 def choose_dropdown(page, select_id: str, needle: str) -> bool:
-    """Select the option matching `needle` in the Select2 dropdown `select_id`.
+    """Select the option matching `needle` in a Select2 dropdown.
 
-    Sets the hidden native <select> and triggers 'change' via jQuery so both
-    Select2's rendered widget and the page's AJAX handlers react. Returns True
-    on success.
+    Sets the hidden native ``<select>`` and triggers 'change' via jQuery so both
+    Select2's rendered widget and the page's AJAX handlers react.
+
+    Args:
+        page: The Page or Frame holding the control.
+        select_id: The id of the target ``<select>`` element.
+        needle: The option text to match - an exact match (Campus/Session), or
+            a ``"<code> - ..."`` prefix for course codes.
+
+    Returns:
+        True if an option was matched and selected; False otherwise.
     """
     try:
         res = page.evaluate(_SELECT2_JS, {"selId": select_id, "needle": needle})
@@ -170,7 +207,18 @@ def choose_dropdown(page, select_id: str, needle: str) -> bool:
 
 
 def scrape_table(page, course_code: str, term: str) -> list[Offering]:
-    """Read the currently-rendered results table into Offering rows."""
+    """Read the currently-rendered results table into Offering rows.
+
+    Args:
+        page: The Page or Frame showing the Course Finder results table.
+        course_code: The course code these results belong to (stamped onto each
+            produced row).
+        term: The DLSU term id to stamp onto each row.
+
+    Returns:
+        One `Offering` per valid table row; rows with no section/schedule, or
+        whose schedule cell can't be parsed, are skipped (and logged).
+    """
     offerings: list[Offering] = []
     rows = page.locator(ROW_SELECTOR)
     n = rows.count()
@@ -225,6 +273,15 @@ def inspect(page) -> None:
 
 
 def write_outputs(offerings: list[Offering], prefix: Path) -> None:
+    """Write the scraped offerings to sibling ``.csv`` and ``.json`` files.
+
+    Args:
+        offerings: The rows to serialise.
+        prefix: Output path without extension; ``.csv`` and ``.json`` are
+            written next to it (parent directories are created as needed). For
+            example ``Path('out/ge_1261')`` produces ``out/ge_1261.csv`` and
+            ``out/ge_1261.json``.
+    """
     prefix.parent.mkdir(parents=True, exist_ok=True)
     rows = [o.as_dict() for o in offerings]
     fields = list(Offering.__annotations__.keys())

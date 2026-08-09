@@ -21,8 +21,8 @@ real database. A section the LLM invents fails C3; a clash fails C1; a repeated
 course fails C2; an out-of-scope course fails C4; a violated time/day/max limit
 fails C5.
 
-Run:
-    python eval_scheduler.py            # prints tables, writes eval_results.md
+Run (from the repo root):
+    python -m evaluation.eval_scheduler   # prints tables, writes evaluation/eval_results.md
 
 Costs one DeepSeek call per scenario (the baseline). The ILP side is free.
 """
@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import os
 from collections import defaultdict
+from pathlib import Path
 
 from sql_agent.agent import _get_client
 from sql_agent.config import DEEPSEEK_MODEL
@@ -289,13 +290,16 @@ def _report(rows, client_ok):
                      f"{'Y' if r['base']['complete'] else 'N'} |")
 
     text = "\n".join(lines)
-    with open("eval_results.md", "w", encoding="utf-8") as f:
+    # Write next to this script (evaluation/eval_results.md) so the output
+    # lands in the same folder regardless of the current working directory.
+    out_path = Path(__file__).resolve().parent / "eval_results.md"
+    with open(out_path, "w", encoding="utf-8") as f:
         f.write(text + "\n")
 
     print("\n" + "=" * 70)
     print(text)
     print("=" * 70)
-    print("\nWrote eval_results.md")
+    print(f"\nWrote {out_path}")
 
 
 if __name__ == "__main__":

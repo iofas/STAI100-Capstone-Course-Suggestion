@@ -22,4 +22,4 @@ EXPOSE 8000 8501
 
 # Default: run the API. docker-compose.yml overrides `command:` for the
 # chatui service to run Streamlit instead.
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "apps.api:app", "--host", "0.0.0.0", "--port", "8000"]

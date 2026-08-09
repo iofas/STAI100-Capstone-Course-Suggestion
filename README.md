@@ -46,10 +46,10 @@ uvx mlflow server
 ### Run
 
 ```bash
-python demo_sql_agent.py "What GE subjects can I take between 12:30pm and 16:00 that I haven't taken, given I've taken GEWORLD LCFAITH LCENWRD?"
+python -m examples.demo_sql_agent "What GE subjects can I take between 12:30pm and 16:00 that I haven't taken, given I've taken GEWORLD LCFAITH LCENWRD?"
 
 # or interactively (with short-term conversation memory):
-python demo_sql_agent.py
+python -m examples.demo_sql_agent
 ```
 
 Then open http://localhost:5000 to see the `sql_agent` experiment: every
@@ -64,7 +64,7 @@ A REST wrapper around the same `ask()` function, for the Chat UI or any
 other client to call over HTTP instead of importing the Python package:
 
 ```bash
-uvicorn api:app --reload
+uvicorn apps.api:app --reload
 ```
 
 Interactive docs (try it out in the browser) are then at
@@ -94,13 +94,13 @@ import `sql_agent` directly). Start the API first, then in a separate
 terminal:
 
 ```bash
-streamlit run chat_ui.py
+streamlit run apps/chat_ui.py
 ```
 
 Open http://localhost:8501. The sidebar shows whether it can reach the API
 and lets you clear the conversation. By default it talks to
 `http://localhost:8000`; point it elsewhere by setting `API_URL` before
-running it, e.g. `API_URL=http://some-host:8000 streamlit run chat_ui.py`.
+running it, e.g. `API_URL=http://some-host:8000 streamlit run apps/chat_ui.py`.
 
 ## Docker
 
@@ -118,8 +118,8 @@ This starts three containers, all built from the same image
 | Service  | Container            | Port   | Runs                                          |
 |----------|-----------------------|--------|-----------------------------------------------|
 | `mlflow` | `course-agent-mlflow` | `5000` | MLflow tracking server                        |
-| `api`    | `course-agent-api`    | `8000` | `uvicorn api:app`                             |
-| `chatui` | `course-agent-chatui` | `8501` | `streamlit run chat_ui.py`                    |
+| `api`    | `course-agent-api`    | `8000` | `uvicorn apps.api:app`                             |
+| `chatui` | `course-agent-chatui` | `8501` | `streamlit run apps/chat_ui.py`                    |
 
 Then open http://localhost:8501 for the Chat UI, http://localhost:8000/docs
 for the API, and http://localhost:5000 for MLflow traces - same as running
@@ -139,12 +139,14 @@ A few things worth knowing:
 
 ## Repo structure
 
+The repo is grouped by function: the two importable packages (`sql_agent/`,
+`scraper/`) hold the core logic, and the runnable code is sorted into folders by
+role (`apps/`, `examples/`, `evaluation/`, `tests/`).
+
 ```
-data/
-  course_offerings_inserts.sql    original single-term INSERT dump (superseded; kept for history)
 course_offerings.db                SQLite DB, downloaded from Drive (1427 sections across terms 1241 + 1261)
-scraper/                           ArchersHub scraper: pull current-term offerings -> DB (see scraper/README.md)
-sql_agent/
+
+sql_agent/                         core package: the agent, scheduler, and their prompts
   config.py                       env-based settings (DeepSeek API key, model, DB path, MLflow)
   db.py                           DB connection + schema introspection for prompting
   prompts.py                      system prompt, schema notes, few-shot examples (lookup)
@@ -153,12 +155,29 @@ sql_agent/
   scheduler.py                    deterministic ILP schedule solver (CP-SAT) + relaxation + validator
   schedule_prompts.py             prompt: NL -> structured scheduling constraints (JSON)
   schedule_agent.py               respond(): routes lookup vs schedule, runs the negotiation loop
-demo_sql_agent.py                  CLI to try the SQL Agent
-api.py                             REST API (FastAPI); /ask routes lookup vs schedule
-chat_ui.py                         Streamlit Chat UI (no form), calls the API over HTTP
-test_cases.py                      30+ predefined test cases across 8 categories
-test_agent.py                      pytest runner evaluating the SQL agent (live LLM)
-test_scheduler.py                  offline pytest for the ILP solver + relaxation + C1-C6 (no LLM/DB)
+
+scraper/                           ArchersHub scraper: pull current-term offerings -> DB (see scraper/README.md)
+
+apps/                              user-facing entry points
+  api.py                          REST API (FastAPI); /ask routes lookup vs schedule
+  chat_ui.py                      Streamlit Chat UI (no form), calls the API over HTTP
+
+examples/
+  demo_sql_agent.py               CLI to try the SQL Agent (python -m examples.demo_sql_agent)
+
+evaluation/
+  eval_scheduler.py               deterministic ILP vs. LLM-only baseline experiment
+  eval_results.md                 the experiment's recorded output
+
+tests/
+  test_cases.py                   30+ predefined test cases across 8 categories
+  test_agent.py                   pytest runner evaluating the SQL agent (live LLM)
+  test_scheduler.py               offline pytest for the ILP solver + relaxation + C1-C6 (no LLM/DB)
+
+docs/
+  README_Checklist.md             deliverables checklist / module ownership
+
+pyproject.toml                     project metadata + pytest config (adds repo root to sys.path)
 requirements.txt
 .env.example                       copy to .env and fill in your DeepSeek API key
 Dockerfile                         single image shared by the api/chatui containers
@@ -210,7 +229,7 @@ python -c "from sql_agent import respond; import json; print(json.dumps(respond(
 Run the offline scheduler tests (no API key or DeepSeek call needed):
 
 ```bash
-pytest test_scheduler.py -v
+pytest tests/test_scheduler.py -v
 ```
 
 ## Dataset
@@ -255,5 +274,5 @@ and security guardrails. It runs the agent against 30+ predefined scenarios acro
 
 To run the test suite:
 ```bash
-pytest test_agent.py -v
+pytest tests/test_agent.py -v
 ```

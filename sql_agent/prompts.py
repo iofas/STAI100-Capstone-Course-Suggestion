@@ -188,8 +188,25 @@ FEW_SHOT_EXAMPLES = [
 
 
 def build_messages(schema: str, question: str, history: list[dict] = None) -> list[dict]:
-    """Assemble the chat messages sent to the model: system prompt with the
-    live schema, a few worked examples, then the user's real question."""
+    """Assemble the chat messages sent to the model for SQL generation.
+
+    Order: system prompt (with the live schema interpolated in), the few-shot
+    worked examples, any prior conversation, then the user's real question.
+
+    Args:
+        schema: The human-readable schema description from
+            `db.get_schema_description`, injected into the system prompt so the
+            model sees the actual columns.
+        question: The student's natural-language question (appended last, as
+            the final user turn).
+        history: Optional prior conversation as ``{"role", "content"}``
+            messages, inserted between the examples and the question so
+            follow-ups have context. Defaults to None (no history).
+
+    Returns:
+        A list of OpenAI-style chat message dicts ready to pass as
+        ``messages=`` to the chat-completions call.
+    """
     messages = [{"role": "system", "content": SYSTEM_PROMPT_TEMPLATE.format(schema=schema)}]
 
     for example in FEW_SHOT_EXAMPLES:

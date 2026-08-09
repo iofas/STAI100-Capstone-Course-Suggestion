@@ -62,7 +62,19 @@ class Offering:
 
 
 def to_24h(t: str) -> str:
-    """'11:00 AM' -> '11:00', '12:30 PM' -> '12:30', '1:00 PM' -> '13:00'."""
+    """Convert a 12-hour clock string to the DB's 24-hour ``HH:MM`` format.
+
+    Args:
+        t: A 12-hour time such as ``'11:00 AM'``, ``'12:30 PM'`` or
+            ``'1:00 PM'``. Surrounding spaces and case are ignored.
+
+    Returns:
+        The same instant as zero-padded 24-hour ``'HH:MM'`` (e.g. ``'1:00 PM'``
+        -> ``'13:00'``, ``'12:00 AM'`` -> ``'00:00'``).
+
+    Raises:
+        ValueError: If `t` is not a recognisable ``H:MM AM/PM`` time.
+    """
     t = t.strip().upper().replace(" ", "")
     m = re.match(r"^(\d{1,2}):(\d{2})(AM|PM)$", t)
     if not m:
@@ -78,7 +90,19 @@ def to_24h(t: str) -> str:
 
 
 def day_code(word: str) -> str:
-    """'THURSDAY' -> 'H'. Raises on anything unexpected."""
+    """Map a spelled-out weekday to its single-letter DB code.
+
+    Args:
+        word: A day name as ArchersHub spells it, e.g. ``'THURSDAY'`` (case and
+            surrounding spaces are ignored).
+
+    Returns:
+        The one-letter code used in the database (``'THURSDAY'`` -> ``'H'``;
+        see `DAY_MAP` for the full mapping, incl. Saturday -> ``'S'``).
+
+    Raises:
+        ValueError: If `word` is not a recognised day name.
+    """
     key = word.strip().upper()
     if key not in DAY_MAP:
         raise ValueError(f"Unrecognised day: {word!r}")
@@ -86,16 +110,31 @@ def day_code(word: str) -> str:
 
 
 def course_code_from_option(option_text: str) -> str:
-    """'GEWORLD - THE CONTEMPORARY WORLD' -> 'GEWORLD'."""
+    """Pull the course code off a dropdown option label.
+
+    Args:
+        option_text: A Course Finder ``<option>`` label of the form
+            ``'<CODE> - <TITLE>'``, e.g. ``'GEWORLD - THE CONTEMPORARY WORLD'``.
+
+    Returns:
+        Just the leading course code (``'GEWORLD'``).
+    """
     return option_text.split(" - ", 1)[0].strip()
 
 
 def _parse_location(loc: str) -> tuple[str | None, bool]:
-    """Return (room_or_None, is_online) from a schedule location fragment.
+    """Split a schedule location fragment into a room and an online flag.
 
-    'Online'        -> (None, True)
-    'Room - L227'   -> ('L227', False)
-    'L227'          -> ('L227', False)
+    Args:
+        loc: The text after the ``:`` in a schedule bracket, e.g. ``'Online'``,
+            ``'Room - L227'`` or a bare ``'L227'``.
+
+    Returns:
+        A ``(room, is_online)`` tuple:
+            'Online'        -> (None, True)
+            'Room - L227'   -> ('L227', False)
+            'L227'          -> ('L227', False)
+        i.e. `room` is None for online-only slots, otherwise the room name.
     """
     loc = loc.strip()
     if re.fullmatch(r"(?i)online", loc):
@@ -107,9 +146,18 @@ def _parse_location(loc: str) -> tuple[str | None, bool]:
 
 
 def parse_schedules(cell_text: str) -> list[dict]:
-    """Parse a Schedules cell (may hold 1-2 bracketed lines) into slots.
+    """Parse a Schedules table cell into its individual meeting slots.
 
-    Each slot: {day, start, end, room, online}.
+    Args:
+        cell_text: The raw text of a Schedules cell, holding one or two
+            bracketed entries like
+            ``'[ MONDAY - 11:00 AM - 12:30 PM : Room - L227 ]'``.
+
+    Returns:
+        One dict per bracket, each with normalised fields:
+        ``{"day": <code>, "start": <HH:MM>, "end": <HH:MM>, "room": <str|None>,
+        "online": <bool>}``. Brackets that don't match the expected shape are
+        skipped, so an unparseable cell yields ``[]``.
     """
     slots: list[dict] = []
     for m in _SCHED_RE.finditer(cell_text):
@@ -136,11 +184,28 @@ def build_offering(
     schedules_text: str,
     remark: str | None = None,
 ) -> Offering:
-    """Assemble one Offering row from raw scraped cell values.
+    """Assemble one `Offering` row from raw scraped cell values.
 
-    - Days/times are normalised to the DB's codes/24h format.
-    - `room` is the physical room from whichever slot has one (hybrid courses
-      list an Online slot + a Room slot); fully-online courses -> None.
+    Days/times are normalised to the DB's codes/24h format, and the two
+    schedule slots are flattened into ``sched1_*`` / ``sched2_*`` columns.
+
+    Args:
+        term: The DLSU term id this offering belongs to (e.g. ``'1261'``).
+        course_code: The subject code (e.g. ``'GEWORLD'``).
+        teacher: The instructor name as scraped, or None; blank values become
+            None.
+        section: The section identifier for this specific offering.
+        schedules_text: The raw Schedules cell text (see `parse_schedules`);
+            must contain at least one parseable bracket.
+        remark: Optional remarks/notes cell text; blank values become None.
+
+    Returns:
+        A fully populated `Offering`. ``room`` is the physical room from
+        whichever slot has one (hybrid courses list an Online slot + a Room
+        slot); fully-online courses get None.
+
+    Raises:
+        ValueError: If no schedule slot can be parsed from `schedules_text`.
     """
     slots = parse_schedules(schedules_text)
     if not slots:

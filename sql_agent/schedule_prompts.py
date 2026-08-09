@@ -113,6 +113,22 @@ _FEW_SHOT = [
 
 def build_constraint_messages(course_codes: list[str], question: str,
                               history: list[dict] = None) -> list[dict]:
+    """Assemble the chat messages for the NL -> constraint-JSON extraction step.
+
+    Order: system prompt (with the list of valid course codes injected so the
+    model can only reference real courses), the few-shot examples, any prior
+    conversation, then the user's message.
+
+    Args:
+        course_codes: All valid course codes from the catalog, embedded in the
+            system prompt to ground the model's ``desired_courses`` output.
+        question: The student's natural-language message.
+        history: Optional prior conversation as ``{"role", "content"}``
+            messages, for follow-up context. Defaults to None.
+
+    Returns:
+        A list of OpenAI-style chat message dicts ready to send to the model.
+    """
     system = CONSTRAINT_SYSTEM_TEMPLATE.format(course_codes=", ".join(course_codes))
     messages = [{"role": "system", "content": system}]
     for ex in _FEW_SHOT:

@@ -21,6 +21,19 @@ PAIR_RE = re.compile(r"^\s*([A-Za-z0-9\-]+)\s*<-\s*([A-Za-z0-9\-]+)\s*$")
 
 
 def read_pairs(path: Path) -> list[tuple[str, str]]:
+    """Parse a prerequisites file into (course, prerequisite) pairs.
+
+    Args:
+        path: Path to a text file with one ``COURSE <- PREREQ`` rule per line.
+            Blank lines and lines starting with ``#`` are ignored.
+
+    Returns:
+        A list of ``(course_code, prerequisite_code)`` tuples, both upper-cased.
+
+    Raises:
+        SystemExit: On the first line that does not match the expected
+            ``COURSE <- PREREQ`` format (message includes the line number).
+    """
     pairs: list[tuple[str, str]] = []
     for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         s = line.strip()

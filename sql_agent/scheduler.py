@@ -43,7 +43,16 @@ _DAY_MAX = 24 * 60  # minutes in a day, used as the IntVar upper bound
 
 
 def to_minutes(hhmm: Optional[str]) -> Optional[int]:
-    """'HH:MM' (or 'HH:MM:SS') 24-hour string -> minutes since midnight."""
+    """Convert a 24-hour clock string to minutes since midnight.
+
+    Args:
+        hhmm: A time as ``'HH:MM'`` or ``'HH:MM:SS'`` (e.g. ``'13:30'``).
+            None or an empty string is treated as "no bound".
+
+    Returns:
+        Minutes since midnight (``13:30`` -> ``810``), or None if `hhmm` was
+        None/empty. Seconds, if present, are ignored.
+    """
     if not hhmm:
         return None
     parts = str(hhmm).strip().split(":")
@@ -51,6 +60,15 @@ def to_minutes(hhmm: Optional[str]) -> Optional[int]:
 
 
 def minutes_to_hhmm(m: Optional[int]) -> Optional[str]:
+    """Inverse of `to_minutes`: minutes since midnight -> ``'HH:MM'`` string.
+
+    Args:
+        m: Minutes since midnight (e.g. ``810``), or None.
+
+    Returns:
+        A zero-padded ``'HH:MM'`` string (``810`` -> ``'13:30'``), or None if
+        `m` was None.
+    """
     if m is None:
         return None
     return f"{m // 60:02d}:{m % 60:02d}"
@@ -81,7 +99,19 @@ class Section:
 
 
 def sections_conflict(a: Section, b: Section) -> bool:
-    """True if any meeting of a overlaps any meeting of b on the same day."""
+    """Test whether two sections have a time clash.
+
+    Two sections conflict if any meeting of one overlaps any meeting of the
+    other on the same weekday (half-open intervals, so back-to-back classes
+    that merely touch at an endpoint do NOT count as a clash).
+
+    Args:
+        a: One section.
+        b: The other section.
+
+    Returns:
+        True if the two sections cannot both be attended; False otherwise.
+    """
     for ma in a.meetings:
         for mb in b.meetings:
             if ma.day == mb.day and ma.start < mb.end and mb.start < ma.end:
@@ -120,8 +150,23 @@ class ScheduleResult:
 # --------------------------------------------------------------------------- #
 def _passes_time_day(section: Section, earliest: Optional[int],
                      latest: Optional[int], allowed_days: Optional[set[str]]) -> bool:
-    """A section is only usable if EVERY one of its meetings fits the window
-    and falls on an allowed day - you have to attend all of them."""
+    """Check a section against the time-window and allowed-day hard filters.
+
+    A section is only usable if EVERY one of its meetings fits the window and
+    falls on an allowed day - the student has to attend all of them.
+
+    Args:
+        section: The section to test.
+        earliest: Earliest allowed start, in minutes since midnight; no lower
+            bound if None.
+        latest: Latest allowed end, in minutes since midnight; no upper bound
+            if None.
+        allowed_days: Set of permitted day codes (subset of DAY_ORDER, e.g.
+            ``{"M", "W"}``); no day restriction if None.
+
+    Returns:
+        True if all of the section's meetings satisfy the given bounds.
+    """
     for m in section.meetings:
         if allowed_days is not None and m.day not in allowed_days:
             return False
@@ -134,6 +179,20 @@ def _passes_time_day(section: Section, earliest: Optional[int],
 
 def _filter_pool(sections: list[Section], earliest: Optional[str],
                  latest: Optional[str], allowed_days: Optional[list[str]]) -> list[Section]:
+    """Narrow the candidate pool to sections that pass the time/day filters.
+
+    Thin wrapper over `_passes_time_day` that accepts the human-facing
+    ``'HH:MM'`` / day-list forms and converts them once for the whole pool.
+
+    Args:
+        sections: All candidate sections to filter.
+        earliest: Earliest allowed start as ``'HH:MM'`` (or None for no bound).
+        latest: Latest allowed end as ``'HH:MM'`` (or None for no bound).
+        allowed_days: List of permitted day codes (or None for no restriction).
+
+    Returns:
+        The subset of `sections` whose meetings all fit the window and days.
+    """
     e, l = to_minutes(earliest), to_minutes(latest)
     days = set(allowed_days) if allowed_days else None
     return [s for s in sections if _passes_time_day(s, e, l, days)]
@@ -150,8 +209,22 @@ def _solve_ilp(pool: list[Section], count_limit: Optional[int],
     courses to pick. Objective: primarily MAXIMISE the number of courses
     scheduled; secondarily (when no_gaps) MINIMISE total time on campus.
 
-    Returns the chosen sections (possibly fewer than requested if the request
-    is over-constrained), or [] if the pool is empty.
+    Args:
+        pool: The candidate sections to choose from (already time/day
+            filtered). One boolean decision variable is created per section.
+        count_limit: In "give me N subjects" mode, the maximum number of
+            distinct courses to include; None means include as many as
+            possible (used in explicit-course-list mode).
+        max_per_day: Maximum number of classes allowed on any single day, or
+            None for no per-day cap.
+        no_gaps: If True, add a secondary objective that minimises total
+            per-day campus span (packs classes, reduces idle gaps); course
+            inclusion still strictly dominates compactness.
+
+    Returns:
+        The chosen sections (possibly fewer than requested if the request is
+        over-constrained), or ``[]`` if the pool is empty or the model is
+        infeasible.
     """
     if not pool:
         return []
@@ -227,7 +300,17 @@ def _solve_ilp(pool: list[Section], count_limit: Optional[int],
 
 
 def campus_span_minutes(chosen: list[Section]) -> int:
-    """Total per-day span (first-start to last-end) across a chosen schedule."""
+    """Sum the per-day time-on-campus of a schedule (the compactness metric).
+
+    For each weekday, the span is (last meeting end - first meeting start);
+    free days contribute 0. Lower is more compact.
+
+    Args:
+        chosen: The sections making up the schedule.
+
+    Returns:
+        Total minutes between first start and last end, summed over all days.
+    """
     total = 0
     for d in DAY_ORDER:
         starts = [m.start for s in chosen for m in s.meetings if m.day == d]
@@ -251,6 +334,28 @@ def solve_with_relaxation(sections: list[Section],
         2. drop the on-campus-day restriction
         3. widen the class-time window
         4. accept dropping course(s)  [reported, never silent]
+
+    This is the module's main entry point and has no LLM/DB dependency, so it
+    is fully unit-testable offline.
+
+    Args:
+        sections: The candidate pool (typically from `fetch_eligible_sections`,
+            but any list of Section objects works - that is what makes it
+            testable with hand-built data).
+        c: The structured constraints extracted from the student's request
+            (desired courses or a target count, time window, allowed days,
+            max-per-day, compactness preference).
+
+    Returns:
+        A `ScheduleResult` recording:
+            - ``feasible``/``chosen``: the selected sections (empty if nothing
+              could be scheduled);
+            - ``dropped_courses``: requested courses that could not be placed;
+            - ``relaxations``: human-readable notes on every constraint that
+              was loosened, in the order it happened;
+            - ``campus_minutes``: compactness of the result, if any;
+            - ``effective``: the constraints actually in force for the returned
+              schedule (correctness is judged against these).
     """
     if c.desired_count:
         target: Optional[set[str]] = None          # count mode: no fixed set
@@ -329,6 +434,20 @@ _SCHEDULE_COLUMNS = (
 
 
 def _row_to_section(row: dict) -> Section:
+    """Convert one course_offerings DB row into a `Section`.
+
+    Flattens the table's two schedule slots (``sched1_*`` / ``sched2_*``) into
+    a single list of `Meeting` intervals, skipping any slot whose day or times
+    are missing (e.g. fully-online sections).
+
+    Args:
+        row: A mapping of column name -> value for one section, as returned by
+            the retrieval query (see `_SCHEDULE_COLUMNS`).
+
+    Returns:
+        A `Section` with its meetings parsed to minute intervals; the original
+        row is preserved in ``Section.raw`` so it can be echoed to the output.
+    """
     meetings = []
     if row.get("sched1_day"):
         s, e = to_minutes(row["sched1_time_start"]), to_minutes(row["sched1_time_end"])
@@ -362,8 +481,21 @@ def fetch_eligible_sections(desired_courses: Optional[list[str]],
     Time/day/gap constraints are applied later, in the solver, so the
     relaxation loop can loosen them without re-querying.
 
-    ``term`` scopes the query to a single DLSU term so archived offerings are
-    never mixed into a live schedule; defaults to ``config.SCHEDULE_TERM``.
+    Args:
+        desired_courses: Course codes the student explicitly asked for; if
+            None/empty, every eligible course in the term is a candidate
+            (count mode).
+        completed_courses: Course codes the student has already finished. Used
+            both to exclude those courses and to satisfy prerequisite checks.
+            Matching is case-insensitive.
+        term: The DLSU term to scope the query to (e.g. ``'1261'``), so
+            archived offerings are never mixed into a live schedule. Defaults
+            to ``config.SCHEDULE_TERM``.
+
+    Returns:
+        Eligible sections as `Section` objects (already excluding completed
+        courses and courses with an unmet prerequisite), before any
+        time/day/gap filtering.
     """
     completed = [c.upper() for c in (completed_courses or [])]
     term = term or config.SCHEDULE_TERM
@@ -407,7 +539,16 @@ def fetch_eligible_sections(desired_courses: Optional[list[str]],
 
 
 def section_exists_in_db(section: Section, term: Optional[str] = None) -> bool:
-    """C3 grounding check: confirm a chosen section is a real DB row in ``term``."""
+    """C3 grounding check: confirm a chosen section is a real DB row.
+
+    Args:
+        section: The section to verify (matched by course code + section id).
+        term: The term to look in; defaults to ``config.SCHEDULE_TERM``.
+
+    Returns:
+        True if a matching row exists in course_offerings for that term - i.e.
+        the section was not hallucinated; False otherwise.
+    """
     term = term or config.SCHEDULE_TERM
     sql = (
         "SELECT 1 FROM course_offerings "
@@ -426,8 +567,24 @@ def validate_schedule(chosen: list[Section], c: ScheduleConstraints,
                       check_db: bool = False, term: Optional[str] = None) -> dict:
     """
     Check a produced schedule against the correctness criteria from docs/RRL.md.
-    Returns a dict of per-criterion booleans plus an overall ``correct`` flag.
     Used by the test suite and can be surfaced in the final presentation.
+
+    Args:
+        chosen: The sections making up the schedule to validate.
+        c: The constraints to validate against. Pass the *effective*
+            constraints (``ScheduleResult.effective``) so relaxed schedules are
+            judged against the constraints actually in force, not the original
+            request.
+        check_db: If True, also run C3 (verify every section is a real DB row).
+            Left False in offline unit tests that use hand-built sections.
+        term: Term to use for the C3 grounding check; defaults to
+            ``config.SCHEDULE_TERM``. Ignored when ``check_db`` is False.
+
+    Returns:
+        A dict of per-criterion booleans - ``C1_no_overlap``,
+        ``C2_no_duplicates``, ``C3_grounded``, ``C4_scope_faithful``,
+        ``C5_constraints_hold`` - plus an overall ``correct`` flag that is the
+        AND of all five.
     """
     # C1: no two chosen sections overlap in time.
     c1 = all(
