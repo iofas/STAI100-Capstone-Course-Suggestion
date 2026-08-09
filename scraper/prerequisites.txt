@@ -1,0 +1,22 @@
+# Course prerequisites. One "COURSE <- PREREQ" per line:
+#   COURSE cannot be taken until PREREQ has been completed.
+#
+# If a course has SEVERAL prerequisites, give it one line per prerequisite:
+#   PEDFOUR <- PETHREE
+#   PEDFOUR <- PE1CRDO
+#
+# Prerequisites are curriculum-wide, NOT per-term, so no term code here.
+# Course codes are the bare codes
+#
+# Edit the list below, then load it with:
+#   python -m scraper.load_prerequisites                 # add to existing
+#   python -m scraper.load_prerequisites --replace       # wipe + load this file
+
+LCLSTWO <- LCLSONE
+LCLSTRI <- LCLSTWO
+PETHREE <- PE2FTEX
+PEDFOUR <- PE2FTEX
+PE2FTEX <- PE1CRDO
+SAS3000 <- SAS2000
+SAS2000 <- SAS1000
+

@@ -29,6 +29,12 @@ DEEPSEEK_TIMEOUT_SECONDS = float(os.getenv("DEEPSEEK_TIMEOUT_SECONDS", "45"))
 # (see course_offerings_inserts.sql at the repo root).
 DB_PATH = os.getenv("COURSE_DB_PATH", "course_offerings.db")
 
+# course_offerings holds multiple terms (DLSU term codes, e.g. 1241, 1261).
+# The scheduler/agent must never mix terms, so every candidate query is scoped
+# to exactly one term. Defaults to the incoming term students schedule for;
+# override with SCHEDULE_TERM to run against archived data (e.g. 1241).
+SCHEDULE_TERM = os.getenv("SCHEDULE_TERM", "1261")
+
 # LLMOps monitoring (MLflow). Start the tracking server separately with
 # `uvx mlflow server` (defaults to http://localhost:5000) before running the
 # agent, otherwise traces just fail to upload instead of crashing the app.

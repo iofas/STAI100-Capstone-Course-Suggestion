@@ -7,7 +7,7 @@ data/unformatted/*.txt via course_offerings_inserts.sql).
 import sqlite3
 from contextlib import contextmanager
 
-from .config import DB_PATH
+from .config import DB_PATH, SCHEDULE_TERM
 
 TABLE_NAME = "course_offerings"
 PREREQUISITES_TABLE_NAME = "course_prerequisites"
@@ -62,6 +62,12 @@ def get_schema_description() -> str:
                 lines.append(f"  - {col['name']} {col['type']}{nullable}")
             lines.append("")
 
+    lines.append(
+        f"IMPORTANT - term: course_offerings holds multiple DLSU terms. Unless "
+        f"the student explicitly asks about another term, ALWAYS restrict every "
+        f"query to the current term with \"AND term = '{SCHEDULE_TERM}'\". Never "
+        f"return rows from more than one term in the same answer. "
+    )
     lines.append(
         "Notes: sched1_day / sched2_day use single-letter codes: "
         "M=Monday, T=Tuesday, W=Wednesday, H=Thursday, F=Friday, S=Saturday. "

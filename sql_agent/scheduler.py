@@ -30,6 +30,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Optional
 
+from . import config
 from .db import get_connection
 
 DAY_ORDER = ["M", "T", "W", "H", "F", "S"]
@@ -349,7 +350,8 @@ def _row_to_section(row: dict) -> Section:
 
 
 def fetch_eligible_sections(desired_courses: Optional[list[str]],
-                            completed_courses: Optional[list[str]]) -> list[Section]:
+                            completed_courses: Optional[list[str]],
+                            term: Optional[str] = None) -> list[Section]:
     """
     Pull candidate sections from course_offerings using a parameterised,
     read-only query built in Python (never LLM-generated). Applies the same
@@ -359,10 +361,14 @@ def fetch_eligible_sections(desired_courses: Optional[list[str]],
         course_prerequisites).
     Time/day/gap constraints are applied later, in the solver, so the
     relaxation loop can loosen them without re-querying.
+
+    ``term`` scopes the query to a single DLSU term so archived offerings are
+    never mixed into a live schedule; defaults to ``config.SCHEDULE_TERM``.
     """
     completed = [c.upper() for c in (completed_courses or [])]
-    where = ["1=1"]
-    params: list = []
+    term = term or config.SCHEDULE_TERM
+    where = ["term = ?"]
+    params: list = [term]
 
     if desired_courses:
         placeholders = ",".join("?" for _ in desired_courses)
@@ -400,21 +406,24 @@ def fetch_eligible_sections(desired_courses: Optional[list[str]],
     return [_row_to_section(r) for r in rows]
 
 
-def section_exists_in_db(section: Section) -> bool:
-    """C3 grounding check: confirm a chosen section is a real DB row."""
+def section_exists_in_db(section: Section, term: Optional[str] = None) -> bool:
+    """C3 grounding check: confirm a chosen section is a real DB row in ``term``."""
+    term = term or config.SCHEDULE_TERM
     sql = (
-        "SELECT 1 FROM course_offerings WHERE course_code = ? AND section = ? "
-        "LIMIT 1"
+        "SELECT 1 FROM course_offerings "
+        "WHERE course_code = ? AND section = ? AND term = ? LIMIT 1"
     )
     with get_connection() as conn:
-        return conn.execute(sql, (section.course_code, section.section)).fetchone() is not None
+        return conn.execute(
+            sql, (section.course_code, section.section, term)
+        ).fetchone() is not None
 
 
 # --------------------------------------------------------------------------- #
 # Correctness validator (RRL criteria C1-C6)
 # --------------------------------------------------------------------------- #
 def validate_schedule(chosen: list[Section], c: ScheduleConstraints,
-                      check_db: bool = False) -> dict:
+                      check_db: bool = False, term: Optional[str] = None) -> dict:
     """
     Check a produced schedule against the correctness criteria from docs/RRL.md.
     Returns a dict of per-criterion booleans plus an overall ``correct`` flag.
@@ -429,7 +438,7 @@ def validate_schedule(chosen: list[Section], c: ScheduleConstraints,
     codes = [s.course_code.upper() for s in chosen]
     c2 = len(codes) == len(set(codes))
     # C3: every chosen section is a real DB row (grounded, not hallucinated).
-    c3 = all(section_exists_in_db(s) for s in chosen) if check_db else True
+    c3 = all(section_exists_in_db(s, term) for s in chosen) if check_db else True
     # C4: only requested courses appear (scope faithful).
     if c.desired_courses:
         requested = {code.upper() for code in c.desired_courses}
