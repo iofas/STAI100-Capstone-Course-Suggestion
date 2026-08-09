@@ -13,30 +13,35 @@ optimizer that cannot hallucinate a clash or invent a section.
 
 
 ### Setup
-Do not forget to download the [dataset](#dataset) accordingly. It should be placed under `/data`
-1. Install SQLite by running this in powershell
-```ps
-winget install SQLite.SQLite
-```
-2. Load the data. PowerShell doesn't support `<` input redirection, so use
-sqlite3's `.read` command instead of piping the file in:
-```powershell
-sqlite3 course_offerings.db ".read course_offerings_inserts.sql"
-```
-3. Verify it works (should return 644)
-```powershell
-sqlite3 course_offerings.db "SELECT COUNT(*) FROM course_offerings;"
-```
-4. Setup python requirements and environment
+
+1. **Download the database.** Grab the prebuilt `course_offerings.db` from the
+[dataset](#dataset) Google Drive link and place it in the **repo root** (next to
+`api.py`). This single file already contains both terms and the prerequisite
+data — no separate load/build step needed.
+
+2. Setup python requirements and environment
 ```bash
 pip install -r requirements.txt
 cp .env.example .env   # then edit .env and add your DEEPSEEK_API_KEY
 ```
-5. Start the MLflow tracking server (for LLMOps monitoring - latency, token
+3. **(Optional)** Install SQLite if you want to inspect the DB directly:
+```powershell
+winget install SQLite.SQLite
+```
+Then verify the data (should return `1241|644` and `1261|783`, i.e. 1427 total):
+```powershell
+sqlite3 course_offerings.db "SELECT term, COUNT(*) FROM course_offerings GROUP BY term;"
+```
+4. Start the MLflow tracking server (for LLMOps monitoring - latency, token
 usage, and traces of every question). Leave this running in its own terminal:
 ```bash
 uvx mlflow server
 ```
+
+> The agent and scheduler read one term at a time, set by `SCHEDULE_TERM` in
+> `.env` (default `1261`). Point it at `1241` to run against the archived term.
+> See [scraper/README.md](scraper/README.md) to regenerate the current term's
+> data from ArchersHub.
 
 ### Run
 
@@ -121,7 +126,7 @@ for the API, and http://localhost:5000 for MLflow traces - same as running
 everything locally, just containerized.
 
 A few things worth knowing:
-- `course_offerings.db` must already exist (built via the Setup steps above)
+- `course_offerings.db` must already exist (downloaded via the Setup steps above)
   before running `docker compose up` - it's mounted read-only into the `api`
   container rather than baked into the image, since it's data, not code.
 - The `api` container's `MLFLOW_TRACKING_URI` is overridden to
@@ -136,8 +141,9 @@ A few things worth knowing:
 
 ```
 data/
-  course_offerings_inserts.sql    generated CREATE TABLE + INSERT statements
-course_offerings.db                SQLite DB loaded from the .sql file above (644 sections)
+  course_offerings_inserts.sql    original single-term INSERT dump (superseded; kept for history)
+course_offerings.db                SQLite DB, downloaded from Drive (1427 sections across terms 1241 + 1261)
+scraper/                           ArchersHub scraper: pull current-term offerings -> DB (see scraper/README.md)
 sql_agent/
   config.py                       env-based settings (DeepSeek API key, model, DB path, MLflow)
   db.py                           DB connection + schema introspection for prompting
@@ -209,14 +215,17 @@ pytest test_scheduler.py -v
 
 ## Dataset
 
-`course_offerings` is built from the DLSU's course offerings from the previous year.
-Each row is one section: course code,
+`course_offerings` holds DLSU course offerings across two terms, tagged by a
+`term` column: **`1241`** (644 archived sections) and **`1261`** (783 current
+sections, scraped from ArchersHub). Each row is one section: course code,
 teacher, section, up to two weekly meeting times (day + start/end), room,
 and remarks (e.g. FULL, HYBRID, ONLINE). Students refer to every course code
 here as a "GE subject" regardless of whether it's GE- or LC-prefixed — both
-are the same general-elective pool.
+are the same general-elective pool. `course_prerequisites` records which
+courses require another course first (curriculum-wide, not per-term).
 
-Dataset may be downloaded [from this Google Drive](https://drive.google.com/file/d/11mMwMHjzWzoACcQR6Y1-s-W2kTVVloX9/view?usp=sharing)
+The prebuilt database (both terms + prerequisites) may be downloaded
+[from this Google Drive](https://drive.google.com/file/d/1ZzfVUj8Z1i4LvZEnIToUQ4ZYxrl0pWsJ/view?usp=sharing)
 which is accessible to those with a valid DLSU email.
 It is not publicly available since it contains personally identifiable information such as the professor's names.
 

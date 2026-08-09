@@ -29,6 +29,7 @@ Costs one DeepSeek call per scenario (the baseline). The ILP side is free.
 from __future__ import annotations
 
 import json
+import os
 from collections import defaultdict
 
 from sql_agent.agent import _get_client
@@ -43,6 +44,10 @@ from sql_agent.scheduler import (
 )
 
 CANDIDATES_PER_COURSE = 12   # cap so both systems share a bounded, equal pool
+
+# The scenarios below use archived offerings, so this eval defaults to the
+# archived term (1241). Override with SCHEDULE_TERM once the new term is loaded.
+EVAL_TERM = os.getenv("SCHEDULE_TERM", "1241")
 
 
 # --------------------------------------------------------------------------- #
@@ -201,7 +206,8 @@ def main() -> None:
     for sc in SCENARIOS:
         c = ScheduleConstraints(**sc["c"])
         candidates = _cap_candidates(
-            fetch_eligible_sections(c.desired_courses or None, c.completed_courses),
+            fetch_eligible_sections(c.desired_courses or None, c.completed_courses,
+                                    term=EVAL_TERM),
             CANDIDATES_PER_COURSE,
         )
         ilp_res = solve_with_relaxation(candidates, c)
