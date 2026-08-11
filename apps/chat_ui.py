@@ -62,16 +62,18 @@ st.markdown(
     .badge-schedule  { background: #fef3c7; color: #b45309; }
     .badge-verified  { background: #dcfce7; color: #15803d; }
     .filter-guide {
-        background: #f0fdf4;
-        border: 1px solid #bbf7d0;
+        background: #0f2b1c;
+        border: 1px solid #1f5137;
         border-radius: 10px;
         padding: 0.8rem 0.9rem;
         font-size: 0.86rem;
         line-height: 1.35rem;
+        color: #d5efe0;
     }
+    .filter-guide b { color: #ffffff; }
     .filter-guide code {
-        background: #dcfce7;
-        color: #14532d;
+        background: #14532d;
+        color: #bbf7d0;
         padding: 0 0.25rem;
         border-radius: 4px;
     }
@@ -79,6 +81,41 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# The schedule-building guide, surfaced on demand from the ℹ️ popover above the
+# chat input (it used to live permanently in the sidebar).
+FILTER_GUIDE_HTML = """
+<div class="filter-guide">
+<b>Just describe the schedule you want in plain language</b> — there's no form.
+A deterministic optimizer builds a verified, conflict-free timetable (and tells
+you what it relaxed if your request is over-tight). You can <b>filter / shape</b>
+it by:
+<ul style="margin:0.4rem 0 0 -0.6rem; padding-left:1rem;">
+  <li><b>Which subjects</b> — name them (<code>GEARTAP, GEWORLD, LCFAITH</code>)
+      or ask for a number (<code>"give me 4 GE subjects"</code>).</li>
+  <li><b>Class start / end time</b> — <code>"nothing before 9am or after 3pm"</code>.</li>
+  <li><b>Timeslot window</b> — <code>"only classes between 12:30 and 16:00"</code>.</li>
+  <li><b>Days on campus</b> — <code>"only Mondays and Wednesdays"</code>,
+      <code>"keep me to 3 days a week"</code>.</li>
+  <li><b>Max classes per day</b> — <code>"no more than 2 classes in one day"</code>.</li>
+  <li><b>Minimize time at school / no gaps</b> —
+      <code>"pack my days, I hate gaps"</code>.</li>
+  <li><b>Already taken / prerequisites</b> —
+      <code>"I've already passed LCLSONE and GEUSELF"</code>
+      (excluded, and prereqs enforced).</li>
+</ul>
+<div style="margin-top:0.5rem; color:#86efac;">
+  Combine any of these in one sentence — e.g.
+  <code>"Build me a compact schedule of 4 subjects, Mon/Wed only,
+  nothing after 4pm, max 2 a day."</code>
+</div>
+<div style="margin-top:0.6rem; color:#9fb8ab; font-size:0.8rem;">
+  Note: College of Liberal Arts–exclusive GEs (e.g. GELITWO, LCFILIC) are not
+  included since not everyone takes them. The NSTP- and LASARE series are also
+  excluded due to the nature of their schedules.
+</div>
+</div>
+"""
 
 # --- Sidebar: connection status + controls -----------------------------
 with st.sidebar:
@@ -102,41 +139,6 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.history = []
         st.rerun()
-
-    st.divider()
-    st.subheader("🗓️ Build a schedule")
-    st.caption(
-        "Just describe the schedule you want in the chat - there's no form. "
-        "A deterministic optimizer builds a verified, conflict-free timetable "
-        "(and tells you what it relaxed if your request is over-tight)."
-    )
-    st.markdown(
-        """
-        <div class="filter-guide">
-        Feel free to ask the model to <b>filter / shape your schedule</b> by:
-        <ul style="margin:0.4rem 0 0 -0.6rem; padding-left:1rem;">
-          <li><b>Which subjects</b> — name them (<code>GEARTAP, GEWORLD, LCFAITH</code>)
-              or ask for a number (<code>"give me 4 GE subjects"</code>).</li>
-          <li><b>Class start / end time</b> — <code>"nothing before 9am or after 3pm"</code>.</li>
-          <li><b>Timeslot window</b> — <code>"only classes between 12:30 and 16:00"</code>.</li>
-          <li><b>Days on campus</b> — <code>"only Mondays and Wednesdays"</code>,
-              <code>"keep me to 3 days a week"</code>.</li>
-          <li><b>Max classes per day</b> — <code>"no more than 2 classes in one day"</code>.</li>
-          <li><b>Minimize time at school / no gaps</b> —
-              <code>"pack my days, I hate gaps"</code>.</li>
-          <li><b>Already taken / prerequisites</b> —
-              <code>"I've already passed LCLSONE and GEUSELF"</code>
-              (excluded, and prereqs enforced).</li>
-        </ul>
-        <div style="margin-top:0.5rem; color:#166534;">
-          Combine any of these in one sentence — e.g.
-          <code>"Build me a compact schedule of 4 subjects, Mon/Wed only,
-          nothing after 4pm, max 2 a day."</code>
-        </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 st.markdown(
     """
@@ -201,6 +203,17 @@ for msg in st.session_state.messages:
         elif rows is not None:
             st.info("No matching sections found.")
         render_schedule_extras(msg)
+
+# --- Info popover + model disclaimer, just above the chat input ----------
+info_col, disclaimer_col = st.columns([1, 4], vertical_alignment="center")
+with info_col:
+    with st.popover("ℹ️ Schedule tips", use_container_width=True):
+        st.markdown(FILTER_GUIDE_HTML, unsafe_allow_html=True)
+with disclaimer_col:
+    st.caption(
+        "⚡ Powered by DeepSeek-v4. Suggestions are AI-generated and may be "
+        "inaccurate — always verify against the official DLSU enlistment system."
+    )
 
 # --- Handle new input -----------------------------------------------------
 question = st.chat_input(

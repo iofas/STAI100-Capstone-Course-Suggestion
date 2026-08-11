@@ -230,3 +230,11 @@ course_offerings_inserts.sql
 mlflow.db
 mlartifacts/
 mlruns/
+
+# ArchersHub scraper
+scraper/.pw-profile/
+scraper/out/
+docs/RRL.md
+course_offerings_dump.sql
+course_offerings.db.bak-pre-term
+.idea/*

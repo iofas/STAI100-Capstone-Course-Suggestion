@@ -45,8 +45,19 @@ Eyeball the CSV, then load it:
 
 ```bash
 python -m scraper.import_to_db --in scraper/out/ge_offerings.json
-# or wipe + re-import just the scraped codes:
+# or wipe + re-import (use the ff if re-scraping the same term, so that duplicates dont appear)
 python -m scraper.import_to_db --in scraper/out/ge_offerings.json --replace-codes
+```
+
+```bash
+# sql statements for the paper
+
+# 1. Number of sections offered per course per term
+SELECT term, course_code, count(*) FROM course_offerings WHERE term='1261' GROUP BY course_code;
+SELECT term, course_code, count(*) FROM course_offerings WHERE term='1241' GROUP BY course_code;
+
+# 2. Number of courses and sections offered per course per term
+SELECT TERM, count(DISTINCT course_code) AS courses_offered  count(*) AS sections_offered FROM course_offerings GROUP BY term;
 ```
 
 ## Terms
