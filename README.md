@@ -83,7 +83,8 @@ curl -X POST http://localhost:8000/ask \
 `{question, reasoning, sql, rows, error, updated_history, mode, relaxations,
 dropped_courses, criteria}`. `mode` is `"lookup"` or `"schedule"`; for schedule
 requests `rows` is the timetable, `relaxations`/`dropped_courses` record any
-negotiation, and `criteria` is the C1-C6 correctness check. Guardrail rejections
+negotiation, and `criteria` is the C1-C7 correctness check plus the
+complete/transparent/outcome grade. Guardrail rejections
 and SQL errors still come back as a normal 200 with `error` populated; only a
 genuine upstream failure (DeepSeek unreachable/timed out) returns a 502.
 
@@ -166,13 +167,21 @@ examples/
   demo_sql_agent.py               CLI to try the SQL Agent (python -m examples.demo_sql_agent)
 
 evaluation/
+  eval_cases.py                   golden dataset: reference SQL + adversarial probes
+                                  (python -m evaluation.eval_cases prints dataset quality)
+  eval_agent.py                   SQL agent eval: execution accuracy, term scoping,
+                                  determinism, safety, latency/tokens
+  eval_agent_results.md           the agent eval's recorded output
+  eval_versions.py                runs the same eval against an older checkout of
+                                  sql_agent/, so v1/v2/v3 share one metric
   eval_scheduler.py               deterministic ILP vs. LLM-only baseline experiment
-  eval_results.md                 the experiment's recorded output
+  eval_results.md                 the scheduling experiment's recorded output
 
 tests/
-  test_cases.py                   30+ predefined test cases across 8 categories
+  test_cases.py                   39 predefined test cases across 8 categories
   test_agent.py                   pytest runner evaluating the SQL agent (live LLM)
-  test_scheduler.py               offline pytest for the ILP solver + relaxation + C1-C6 (no LLM/DB)
+  test_scheduler.py               offline pytest for the ILP solver + relaxation + C1-C7 (no LLM/DB)
+  test_scheduler_db.py            C3 grounding + C6 eligibility against the real catalog (no LLM)
 
 docs/
   README_Checklist.md             deliverables checklist / module ownership
@@ -210,12 +219,22 @@ window → as a last resort, drop a course), re-solves, and **reports exactly wh
 it relaxed**, so the student can decide. This multi-turn "diagnose → relax →
 explain" behaviour is what makes it an agent rather than an LLM wrapper.
 
-**Verified, not trusted.** Every returned schedule is checked by
-`scheduler.validate_schedule()` against these correctness criteria: C1 no
-overlapping timeslots, C2 no duplicate courses, C3 every section is a real
-catalog row (grounded), C4 only requested courses appear, C5 the effective hard
-constraints hold. The API returns these as `criteria`, and the Chat UI shows a
-✓ Verified badge.
+**Verified, not trusted.** Every returned schedule is graded by
+`scheduler.grade_schedule()` on three separate axes - **correct** (nothing in it
+is wrong), **complete** (the student got everything they asked for), and
+**transparent** (every compromise is reported). Correctness is the seven hard
+criteria C1-C7: no overlapping timeslots, no duplicates, every section *and its
+times* match the catalog, only requested courses appear, the effective hard
+constraints hold, every course is one the student is eligible for, and every
+section is actually attendable. The API returns these as `criteria`, and the
+Chat UI shows a ✓ Verified badge.
+
+Correct and complete are deliberately different questions: an over-constrained
+request has no complete answer, and the honest response is a correct schedule
+that says what could not be fitted - which is why a compromise that goes
+*unreported* is graded as a failure even when every section in the schedule is
+fine. The criteria are defined in full at the validator section of
+`sql_agent/scheduler.py`.
 
 There is **no input form** - students describe what they want in the chat, and
 the sidebar lists the filters they can ask for in plain language.
@@ -229,8 +248,37 @@ python -c "from sql_agent import respond; import json; print(json.dumps(respond(
 Run the offline scheduler tests (no API key or DeepSeek call needed):
 
 ```bash
-pytest tests/test_scheduler.py -v
+pytest tests/test_scheduler.py tests/test_scheduler_db.py -v
 ```
+
+## Evaluation
+
+The pytest suites are the regression gate; `evaluation/` is the measuring
+instrument. Three commands, in increasing order of what they cost to run:
+
+```bash
+python -m evaluation.eval_cases
+```
+
+Golden-dataset quality - how many test cases can actually distinguish a right
+answer from a wrong one. No API calls.
+
+```bash
+python -m evaluation.eval_scheduler
+```
+
+The ILP pipeline vs. an LLM-only baseline on identical scenarios, scored by the
+same C1-C7 validator. One DeepSeek call per scenario.
+
+```bash
+python -m evaluation.eval_agent --runs 1
+```
+
+The SQL agent scored on **execution accuracy** (does the query return the same
+rows as a reference query?) rather than substring matching, plus term-scoping
+compliance, structural safety via a real SQL parser, adversarial refusal rate,
+and latency/token cost. Costs (cases x runs) calls - 51 per run. Raise `--runs`
+to measure run-to-run determinism; that multiplies the cost accordingly.
 
 ## Dataset
 

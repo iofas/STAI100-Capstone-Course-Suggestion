@@ -176,9 +176,10 @@ def render_schedule_extras(msg: dict) -> None:
             unsafe_allow_html=True,
         )
         st.caption(
-            "No time conflicts (C1), no duplicate courses (C2), every section "
-            "exists in the catalog (C3), only requested courses (C4), all hard "
-            "constraints hold (C5)."
+            "No time conflicts (C1), no duplicates (C2), every section and its "
+            "times match the catalog (C3), only requested courses (C4), all "
+            "hard constraints hold (C5), every course is one you're eligible "
+            "for (C6), every section is attendable (C7)."
         )
 
 # --- Render existing conversation ---------------------------------------

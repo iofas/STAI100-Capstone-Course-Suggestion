@@ -46,15 +46,20 @@ def setup_tracing() -> None:
         mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
         mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
         mlflow.openai.autolog()
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
         # Don't let monitoring setup take the app down if the tracking
         # server isn't running yet - just log and move on without tracing.
+        # The full traceback is ~80 lines of urllib3/requests frames that say
+        # nothing beyond "connection refused", and it buries the output of
+        # whatever the user was actually running, so keep it to one line and
+        # leave the traceback to DEBUG for when it is genuinely needed.
         logger.warning(
             "MLflow tracing could not be configured (tracking server at %s "
-            "unreachable?). Continuing without tracing.",
+            "unreachable?). Continuing without tracing. [%s]",
             MLFLOW_TRACKING_URI,
-            exc_info=True,
+            type(exc).__name__,
         )
+        logger.debug("MLflow setup failure detail", exc_info=True)
         return
 
     _configured = True

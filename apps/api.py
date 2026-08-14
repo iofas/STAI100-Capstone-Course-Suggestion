@@ -70,7 +70,7 @@ class AskResponse(BaseModel):
     mode: str = "lookup"                         # "lookup" | "schedule"
     relaxations: list[str] = []                  # constraints the agent loosened
     dropped_courses: list[str] = []              # courses it couldn't fit
-    criteria: Optional[dict[str, Any]] = None    # C1-C6 correctness check
+    criteria: Optional[dict[str, Any]] = None    # C1-C7 grade from grade_schedule()
 
 
 @app.get("/health")

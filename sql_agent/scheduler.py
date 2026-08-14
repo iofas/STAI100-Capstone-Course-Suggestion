@@ -8,7 +8,7 @@ built here by an Integer Linear Program solved with Google OR-Tools' CP-SAT
 engine - a deterministic optimizer that CANNOT invent a section or return a
 schedule with a time clash, because every constraint is checked explicitly.
 
-Design (see docs/RRL.md):
+Design:
   * Hard constraints  -> filter the candidate pool + model constraints
                          (one section per course, no time overlap, max
                          classes/day, allowed on-campus days, time window).
@@ -33,10 +33,14 @@ from typing import Optional
 from . import config
 from .db import get_connection
 
-DAY_ORDER = ["M", "T", "W", "H", "F", "S"]
+# 'U' is Sunday (the scraper's DAY_MAP convention - see scraper/parse.py).
+# Nothing is currently offered on Sunday, but the day still has to be modelled:
+# a day missing from DAY_ORDER is skipped by the max-per-day and campus-span
+# constraints, which would silently let a Sunday meeting escape them.
+DAY_ORDER = ["M", "T", "W", "H", "F", "S", "U"]
 DAY_NAMES = {
     "M": "Monday", "T": "Tuesday", "W": "Wednesday",
-    "H": "Thursday", "F": "Friday", "S": "Saturday",
+    "H": "Thursday", "F": "Friday", "S": "Saturday", "U": "Sunday",
 }
 _DAY_MIN = 0
 _DAY_MAX = 24 * 60  # minutes in a day, used as the IntVar upper bound
@@ -137,6 +141,10 @@ class ScheduleResult:
     feasible: bool
     chosen: list[Section] = field(default_factory=list)
     dropped_courses: list[str] = field(default_factory=list)
+    # Count mode ("give me 3 GEs") has no course codes to list as dropped, so
+    # a shortfall is recorded as a number instead. Without this a request for 3
+    # that only fits 2 would come back looking like a clean success.
+    unfilled_count: int = 0
     relaxations: list[str] = field(default_factory=list)
     campus_minutes: Optional[int] = None     # total per-day span, if optimised
     # The constraints actually in force for the returned schedule (== the
@@ -369,6 +377,12 @@ def solve_with_relaxation(sections: list[Section],
 
     def attempt() -> list[Section]:
         pool = _filter_pool(sections, cur_e, cur_l, cur_days)
+        # Enforce C4 (scope) here rather than trusting the caller's query to
+        # have pre-filtered the pool: the objective maximises courses included,
+        # so any unrequested section left in the pool would be scheduled as a
+        # bonus - the "asked for math, got physics too" failure.
+        if target is not None:
+            pool = [s for s in pool if s.course_code.upper() in target]
         return _solve_ilp(pool, c.desired_count, cur_max, c.no_gaps)
 
     def is_complete(chosen: list[Section]) -> bool:
@@ -403,6 +417,7 @@ def solve_with_relaxation(sections: list[Section],
 
     got = {s.course_code.upper() for s in chosen}
     dropped = sorted(target - got) if target else []
+    unfilled = max(0, c.desired_count - len(got)) if c.desired_count else 0
     effective = ScheduleConstraints(
         desired_courses=list(c.desired_courses),
         desired_count=c.desired_count,
@@ -417,6 +432,7 @@ def solve_with_relaxation(sections: list[Section],
         feasible=bool(chosen),
         chosen=chosen,
         dropped_courses=dropped,
+        unfilled_count=unfilled,
         relaxations=relax,
         campus_minutes=campus_span_minutes(chosen) if chosen else None,
         effective=effective,
@@ -457,6 +473,11 @@ def _row_to_section(row: dict) -> Section:
         s, e = to_minutes(row["sched2_time_start"]), to_minutes(row["sched2_time_end"])
         if s is not None and e is not None:
             meetings.append(Meeting(row["sched2_day"], s, e))
+    # A handful of catalog rows list the same meeting twice in both slots (e.g.
+    # GERPHIS S53B: T 14:30-16:00 in sched1 AND sched2). That is one meeting
+    # listed redundantly, not a section that clashes with itself, so collapse
+    # it - otherwise the C7 internal-consistency check would flag real rows.
+    meetings = list(dict.fromkeys(meetings))
     return Section(
         course_code=row["course_code"],
         section=row["section"],
@@ -560,14 +581,149 @@ def section_exists_in_db(section: Section, term: Optional[str] = None) -> bool:
         ).fetchone() is not None
 
 
-# --------------------------------------------------------------------------- #
-# Correctness validator (RRL criteria C1-C6)
-# --------------------------------------------------------------------------- #
-def validate_schedule(chosen: list[Section], c: ScheduleConstraints,
-                      check_db: bool = False, term: Optional[str] = None) -> dict:
+def section_grounded(section: Section, term: Optional[str] = None) -> bool:
+    """C3 grounding check: the section is real AND its meeting times are real.
+
+    Stronger than `section_exists_in_db`: a schedule can name a genuine section
+    but state the wrong days/times for it (a plausible-looking hallucination
+    that would still fail a student in practice), so the meetings are compared
+    against the catalog row as well.
+
+    Some sections appear under more than one row (co-taught sections share a
+    code + section id but list different teachers), so the meetings only have
+    to match one of them.
+
+    Args:
+        section: The section to verify.
+        term: The term to look in; defaults to ``config.SCHEDULE_TERM``.
+
+    Returns:
+        True if a row exists for that course/section/term whose weekly meetings
+        are exactly the section's meetings; False otherwise.
     """
-    Check a produced schedule against the correctness criteria from docs/RRL.md.
-    Used by the test suite and can be surfaced in the final presentation.
+    term = term or config.SCHEDULE_TERM
+    sql = (
+        f"SELECT {_SCHEDULE_COLUMNS} FROM course_offerings "
+        "WHERE course_code = ? AND section = ? AND term = ?"
+    )
+    with get_connection() as conn:
+        rows = [dict(r) for r in conn.execute(
+            sql, (section.course_code, section.section, term)
+        ).fetchall()]
+    if not rows:
+        return False
+    claimed = set(section.meetings)
+    return any(set(_row_to_section(r).meetings) == claimed for r in rows)
+
+
+def unmet_prerequisites(course_code: str, completed: list[str]) -> list[str]:
+    """List the prerequisites of `course_code` the student has not completed.
+
+    Args:
+        course_code: The course to check.
+        completed: Course codes the student has finished (case-insensitive).
+
+    Returns:
+        The prerequisite codes still missing, in catalog order. An empty list
+        means the course is eligible on prerequisite grounds - including the
+        common case of a course with no prerequisite rows at all.
+    """
+    done = {c.upper() for c in (completed or [])}
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT prerequisite_code FROM course_prerequisites WHERE UPPER(course_code) = ?",
+            (course_code.upper(),),
+        ).fetchall()
+    return [r[0] for r in rows if str(r[0]).upper() not in done]
+
+
+def section_wellformed(section: Section) -> bool:
+    """C7 check: the section is something a student could actually attend.
+
+    Catches the degenerate shapes that would otherwise slip through the other
+    criteria - most importantly a section with NO meetings, which conflicts
+    with nothing and therefore passes the overlap check vacuously (exactly what
+    an LLM-invented entry looks like when it names a course but no times).
+
+    Args:
+        section: The section to check.
+
+    Returns:
+        True if the section has at least one meeting, every meeting uses a
+        known day code and a positive-length interval inside a 24-hour day, and
+        no two of its own meetings overlap.
+    """
+    if not section.meetings:
+        return False
+    for m in section.meetings:
+        if m.day not in DAY_ORDER:
+            return False
+        if not (_DAY_MIN <= m.start < m.end <= _DAY_MAX):
+            return False
+    for i in range(len(section.meetings)):
+        for j in range(i + 1, len(section.meetings)):
+            a, b = section.meetings[i], section.meetings[j]
+            if a.day == b.day and a.start < b.end and b.start < a.end:
+                return False
+    return True
+
+
+# --------------------------------------------------------------------------- #
+# Correctness validator
+#
+# A schedule is judged on three separate questions, because they fail in
+# different ways:
+#
+#   CORRECT     - is anything in it wrong? The seven hard criteria below.
+#   COMPLETE    - did the student get everything they asked for? A schedule
+#                 that drops an impossible course is still correct, just not
+#                 complete - some requests have no complete answer.
+#   TRANSPARENT - was every compromise reported? A silent relaxation or a
+#                 quietly dropped course is a wrong answer that looks right.
+#
+# SUCCESS = CORRECT and TRANSPARENT. Completeness is the goal, not the
+# standard. The criteria:
+#
+#   C1 no overlap      no two chosen sections share a minute on the same day
+#                      (half-open intervals: 10:30 end / 10:30 start is fine)
+#   C2 no duplicates   one section per course, and no section listed twice
+#   C3 grounded        every section is a real catalog row for the term, WITH
+#                      the times the catalog lists - naming a real section but
+#                      moving it to a convenient slot is still a hallucination
+#   C4 scope faithful  only courses the student asked for (count mode: only
+#                      sections from the candidate pool)
+#   C5 constraints     time window, allowed days, max/day, requested count
+#   C6 eligible        nothing already taken, no unmet prerequisite
+#   C7 wellformed      attendable: >=1 meeting, valid day, start < end, no
+#                      self-clash. Load-bearing because a section with no
+#                      meetings clashes with nothing and so passes C1
+#                      vacuously - which is exactly what an invented entry
+#                      looks like
+# --------------------------------------------------------------------------- #
+CRITERIA = [
+    "C1_no_overlap",
+    "C2_no_duplicates",
+    "C3_grounded",
+    "C4_scope_faithful",
+    "C5_constraints_hold",
+    "C6_eligible",
+    "C7_wellformed",
+]
+
+# The criteria that need the database to answer. With check_db=False (offline
+# unit tests on hand-built sections) they are reported as True by convention -
+# "not checked here", not "verified".
+DB_CRITERIA = ["C3_grounded", "C6_eligible"]
+
+
+def validate_schedule(chosen: list[Section], c: ScheduleConstraints,
+                      check_db: bool = False, term: Optional[str] = None,
+                      pool: Optional[list[Section]] = None) -> dict:
+    """
+    Check a produced schedule against the C1-C7 correctness criteria defined
+    above. This answers "is this schedule WRONG?" only - it says nothing about
+    whether the student got everything they asked for, which is completeness
+    (see `grade_schedule`).
 
     Args:
         chosen: The sections making up the schedule to validate.
@@ -575,34 +731,52 @@ def validate_schedule(chosen: list[Section], c: ScheduleConstraints,
             constraints (``ScheduleResult.effective``) so relaxed schedules are
             judged against the constraints actually in force, not the original
             request.
-        check_db: If True, also run C3 (verify every section is a real DB row).
-            Left False in offline unit tests that use hand-built sections.
-        term: Term to use for the C3 grounding check; defaults to
+        check_db: If True, also run the criteria that need the catalog (C3
+            grounding, C6 eligibility). Left False in offline unit tests that
+            use hand-built sections.
+        term: Term to use for the DB-backed criteria; defaults to
             ``config.SCHEDULE_TERM``. Ignored when ``check_db`` is False.
+        pool: Optional candidate pool the schedule was drawn from. When given,
+            C4 additionally requires every chosen section to come from that
+            pool - the only way to catch an out-of-scope course in count mode,
+            where there is no explicit requested list to compare against.
 
     Returns:
-        A dict of per-criterion booleans - ``C1_no_overlap``,
-        ``C2_no_duplicates``, ``C3_grounded``, ``C4_scope_faithful``,
-        ``C5_constraints_hold`` - plus an overall ``correct`` flag that is the
-        AND of all five.
+        A dict of per-criterion booleans (``C1_no_overlap`` ...
+        ``C7_wellformed``, see `CRITERIA`) plus:
+            - ``correct``: the AND of all seven - the pass/fail verdict;
+            - ``failed``: the names of the criteria that failed, for reporting.
     """
     # C1: no two chosen sections overlap in time.
     c1 = all(
         not sections_conflict(chosen[i], chosen[j])
         for i in range(len(chosen)) for j in range(i + 1, len(chosen))
     )
-    # C2: at most one section per course (no duplicate course).
+
+    # C2: no duplicates - at most one section per course, and no section listed
+    # twice (a repeated row would double-book the student against themselves).
     codes = [s.course_code.upper() for s in chosen]
-    c2 = len(codes) == len(set(codes))
-    # C3: every chosen section is a real DB row (grounded, not hallucinated).
-    c3 = all(section_exists_in_db(s, term) for s in chosen) if check_db else True
-    # C4: only requested courses appear (scope faithful).
+    pairs = [(s.course_code.upper(), str(s.section).upper()) for s in chosen]
+    c2 = len(codes) == len(set(codes)) and len(pairs) == len(set(pairs))
+
+    # C3: every chosen section is a real catalog row, with the times the
+    # catalog actually lists for it (grounded, not hallucinated).
+    c3 = all(section_grounded(s, term) for s in chosen) if check_db else True
+
+    # C4: only in-scope courses appear. Explicit-list mode: nothing outside the
+    # requested list. Count mode: nothing outside the candidate pool, when one
+    # was supplied (otherwise any eligible course is in scope by definition).
     if c.desired_courses:
         requested = {code.upper() for code in c.desired_courses}
         c4 = set(codes).issubset(requested)
     else:
-        c4 = True  # count mode: any eligible course is in-scope by definition
-    # C5: hard constraints hold (time window, allowed days, max/day).
+        c4 = True
+    if pool is not None:
+        offered = {(s.course_code.upper(), str(s.section).upper()) for s in pool}
+        c4 = c4 and all(p in offered for p in pairs)
+
+    # C5: the hard constraints in force hold - time window, allowed days,
+    # max classes/day, and (count mode) the requested number of courses.
     e, l = to_minutes(c.earliest), to_minutes(c.latest)
     days = set(c.allowed_days) if c.allowed_days else None
     c5_window = all(_passes_time_day(s, e, l, days) for s in chosen)
@@ -611,13 +785,128 @@ def validate_schedule(chosen: list[Section], c: ScheduleConstraints,
         for d in DAY_ORDER:
             if sum(1 for s in chosen if d in s.days) > c.max_per_day:
                 c5_max = False
-    c5 = c5_window and c5_max
+    c5_count = c.desired_count is None or len(set(codes)) <= c.desired_count
+    c5 = c5_window and c5_max and c5_count
 
-    return {
+    # C6: the student is allowed to take every course in the schedule - nothing
+    # they already completed, nothing with a prerequisite they haven't met.
+    if check_db:
+        completed = {code.upper() for code in c.completed_courses}
+        c6 = all(
+            code not in completed and not unmet_prerequisites(code, list(completed))
+            for code in set(codes)
+        )
+    else:
+        c6 = True
+
+    # C7: every section is attendable - real meetings, sane intervals, no
+    # section clashing with itself.
+    c7 = all(section_wellformed(s) for s in chosen)
+
+    report = {
         "C1_no_overlap": c1,
         "C2_no_duplicates": c2,
         "C3_grounded": c3,
         "C4_scope_faithful": c4,
         "C5_constraints_hold": c5,
-        "correct": c1 and c2 and c3 and c4 and c5,
+        "C6_eligible": c6,
+        "C7_wellformed": c7,
     }
+    report["correct"] = all(report[k] for k in CRITERIA)
+    report["failed"] = [k for k in CRITERIA if not report[k]]
+    return report
+
+
+def is_complete(chosen: list[Section], c: ScheduleConstraints) -> bool:
+    """Did the student get everything they asked for?
+
+    Completeness is deliberately separate from correctness: a schedule that
+    drops an impossible course is still *correct* (nothing in it is wrong), it
+    is just not *complete*.
+
+    Args:
+        chosen: The sections making up the schedule.
+        c: The student's ORIGINAL constraints (not the relaxed/effective ones -
+            completeness is measured against what they actually asked for).
+
+    Returns:
+        True if every requested course is scheduled, or - in count mode - at
+        least ``desired_count`` distinct courses are.
+    """
+    got = {s.course_code.upper() for s in chosen}
+    if c.desired_count:
+        return len(got) >= c.desired_count
+    if c.desired_courses:
+        return {code.upper() for code in c.desired_courses}.issubset(got)
+    return bool(got)
+
+
+def grade_schedule(result: ScheduleResult, c: ScheduleConstraints,
+                   check_db: bool = False, term: Optional[str] = None,
+                   pool: Optional[list[Section]] = None) -> dict:
+    """Grade a solver run on all three axes: correct, complete, transparent.
+
+    This is the single "did it work?" call for the evaluation and the demo. It
+    keeps the three questions apart on purpose:
+        * CORRECT     - is anything in the schedule wrong? (C1-C7, hard gate)
+        * COMPLETE    - did the student get everything they asked for?
+        * TRANSPARENT - was every deviation from the request reported?
+
+    Args:
+        result: The `ScheduleResult` returned by `solve_with_relaxation`.
+        c: The student's ORIGINAL constraints. Correctness is checked against
+            ``result.effective`` (what was actually in force), while
+            completeness is measured against this original request.
+        check_db: Run the catalog-backed criteria (C3, C6). See
+            `validate_schedule`.
+        term: Term for the DB-backed criteria; defaults to
+            ``config.SCHEDULE_TERM``.
+        pool: Optional candidate pool, forwarded to C4.
+
+    Returns:
+        The `validate_schedule` report plus:
+            - ``complete``: every requested course scheduled;
+            - ``coverage``: fraction of requested courses scheduled (0.0-1.0);
+            - ``transparent``: every dropped course and relaxation is reported;
+            - ``negotiated``: something had to give (a relaxation or a drop);
+            - ``outcome``: ``"FULL"`` (correct, complete, nothing relaxed),
+              ``"NEGOTIATED"`` (correct and honestly reported, but something was
+              relaxed or dropped), or ``"FAILED"`` (incorrect, or nothing
+              produced at all).
+    """
+    effective = result.effective or c
+    report = validate_schedule(result.chosen, effective, check_db=check_db,
+                               term=term, pool=pool)
+
+    got = {s.course_code.upper() for s in result.chosen}
+    if c.desired_count:
+        requested_n = c.desired_count
+        covered = min(len(got), c.desired_count)
+    else:
+        requested = {code.upper() for code in c.desired_courses}
+        requested_n = len(requested)
+        covered = len(requested & got)
+    report["complete"] = is_complete(result.chosen, c)
+    report["coverage"] = (covered / requested_n) if requested_n else 1.0
+
+    # Transparency: anything the student asked for that is missing must appear
+    # in dropped_courses, and any loosened constraint must be recorded. Silent
+    # deviation is the failure mode this criterion exists to catch.
+    missing = ({code.upper() for code in c.desired_courses} - got
+               if c.desired_courses else set())
+    reported = {code.upper() for code in result.dropped_courses}
+    relaxed_silently = (effective != c and not result.relaxations)
+    shortfall = max(0, c.desired_count - len(got)) if c.desired_count else 0
+    report["transparent"] = (missing.issubset(reported)
+                             and not relaxed_silently
+                             and shortfall == result.unfilled_count)
+    report["negotiated"] = bool(result.relaxations or result.dropped_courses
+                                or result.unfilled_count)
+
+    if not result.chosen or not report["correct"] or not report["transparent"]:
+        report["outcome"] = "FAILED"
+    elif report["complete"] and not report["negotiated"]:
+        report["outcome"] = "FULL"
+    else:
+        report["outcome"] = "NEGOTIATED"
+    return report

@@ -1,7 +1,8 @@
 """
 Schedule Agent orchestration - the agentic layer that ties Step 1 (LLM
 translation) to Steps 2-3 (deterministic retrieval + ILP scheduling), and
-handles the infeasibility NEGOTIATION described in docs/RRL.md (Fix #2).
+handles the infeasibility NEGOTIATION (relax the lowest-priority constraint,
+re-solve, report what gave) rather than failing or fabricating a schedule.
 
 Flow of ``respond()`` (the single entry point the API/UI calls):
 
@@ -35,9 +36,9 @@ from .scheduler import (
     ScheduleResult,
     Section,
     fetch_eligible_sections,
+    grade_schedule,
     minutes_to_hhmm,
     solve_with_relaxation,
-    validate_schedule,
 )
 
 
@@ -171,7 +172,7 @@ def _render_explanation(c: ScheduleConstraints, result: ScheduleResult,
                 "rule everything out.")
 
     # Headline
-    if not result.relaxations and not result.dropped_courses:
+    if not result.relaxations and not result.dropped_courses and not result.unfilled_count:
         if c.no_gaps:
             lines.append(f"Here's an optimal, conflict-free schedule with all "
                          f"{n} course(s), packed as tightly as the offerings allow.")
@@ -187,6 +188,12 @@ def _render_explanation(c: ScheduleConstraints, result: ScheduleResult,
         lines.append("To make it fit, I:")
         for r in result.relaxations:
             lines.append(f"  • {r}")
+
+    if result.unfilled_count:
+        lines.append("")
+        lines.append(f"You asked for {c.desired_count} subject(s), but only {n} "
+                     "can be taken together without a clash - every other "
+                     "eligible section overlaps one of these.")
 
     if result.dropped_courses:
         lines.append("")
@@ -233,8 +240,9 @@ def suggest_schedule(question: str, history: list[dict] = None,
     Returns:
         The standard result dict (``question``/``reasoning``/``sql``/``rows``/
         ``error``/``raw_response``) plus schedule-specific fields: ``mode``
-        (``"schedule"``), ``relaxations``, ``dropped_courses``, and the C1-C6
-        ``criteria`` report.
+        (``"schedule"``), ``relaxations``, ``dropped_courses``, and the
+        ``criteria`` grade (C1-C7 plus complete/transparent/outcome - see
+        ``scheduler.grade_schedule``).
     """
     if constraints is None:
         constraints, reasoning_raw = extract_constraints(question, history)
@@ -255,10 +263,11 @@ def suggest_schedule(question: str, history: list[dict] = None,
         c.completed_courses,
     )
     result = solve_with_relaxation(sections, c)
-    # Judge correctness against the constraints actually in force for the
-    # returned schedule (the effective set after any negotiated relaxation).
-    effective = result.effective or c
-    criteria = (validate_schedule(result.chosen, effective, check_db=True)
+    # Grade on all three axes. Correctness (C1-C7) is judged against the
+    # constraints actually in force after any negotiated relaxation, while
+    # completeness is measured against what the student originally asked for -
+    # so a dropped course shows up as incomplete, never as incorrect.
+    criteria = (grade_schedule(result, c, check_db=True, pool=sections)
                 if result.chosen else {})
     explanation = _render_explanation(c, result, criteria)
     rows = _schedule_rows(result)

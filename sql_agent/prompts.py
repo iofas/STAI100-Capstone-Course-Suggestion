@@ -37,6 +37,13 @@ unless the user explicitly removes them.
 taken, you MUST treat this as a strict filter. Use a NOT EXISTS subquery \
 against course_prerequisites to ensure the requested course does not require \
 the untaken class. Never ignore constraints just because a user asks for a specific class.
+8. NO IMAGINED HISTORY: The worked examples below are training demonstrations, \
+not turns in your conversation with this student. They are separated from the \
+real conversation by an "END OF EXAMPLES" marker. If the student refers back to \
+something ("do that again", "what you just did", "the previous one") and there \
+is no real turn after that marker to refer to, respond with SQL: NONE and say in \
+REASONING that there is no previous request to repeat. Never treat an example as \
+the thing the student is referring to.
 
 You must respond in valid JSON format containing exactly two keys: \
 "reasoning" and "sql". "reasoning" is a string containing the brief \
@@ -47,6 +54,14 @@ no extra commentary outside those two fields:
 
 {{"reasoning": "...", "sql": "..."}}
 """
+
+# Boundary between the few-shot examples and the actual conversation.
+EXAMPLES_END_MARKER = (
+    "END OF EXAMPLES. Everything above was a training demonstration and did not "
+    "happen in this conversation. The real conversation with the student starts "
+    "now; if nothing follows this marker except a single question, that question "
+    "is the student's first turn and there is no previous request to refer back to."
+)
 
 # Few-shot examples double as the "chain-of-thought" pattern: each shows the
 # model the reasoning -> SQL shape we want it to imitate, using the real
@@ -191,7 +206,8 @@ def build_messages(schema: str, question: str, history: list[dict] = None) -> li
     """Assemble the chat messages sent to the model for SQL generation.
 
     Order: system prompt (with the live schema interpolated in), the few-shot
-    worked examples, any prior conversation, then the user's real question.
+    worked examples, the end-of-examples marker, any prior conversation, then
+    the user's real question.
 
     Args:
         schema: The human-readable schema description from
@@ -218,8 +234,14 @@ def build_messages(schema: str, question: str, history: list[dict] = None) -> li
             }
         )
 
+    # The examples above are sent as real user/assistant turns, so without a
+    # marker the model reads them as things it "just did" - "do what you just
+    # did" with no history would replay the last example. This closes the list
+    # so rule 8 has an explicit boundary to point at.
+    messages.append({"role": "system", "content": EXAMPLES_END_MARKER})
+
     if history:
         messages.extend(history)
-    
+
     messages.append({"role": "user", "content": question})
     return messages

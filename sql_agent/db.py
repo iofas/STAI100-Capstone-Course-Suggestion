@@ -93,7 +93,10 @@ def get_schema_description() -> str:
     )
     lines.append(
         "Notes: sched1_day / sched2_day use single-letter codes: "
-        "M=Monday, T=Tuesday, W=Wednesday, H=Thursday, F=Friday, S=Saturday. "
+        "M=Monday, T=Tuesday, W=Wednesday, H=Thursday, F=Friday, S=Saturday, "
+        "U=Sunday. Note S is Saturday and U is Sunday - never use 'S' for a "
+        "Sunday question. No classes are currently scheduled on Sunday, so a "
+        "Sunday query correctly returns no rows. "
         "Most sections meet twice a week (sched1_* + sched2_*); some meet "
         "only once, in which case sched2_* columns are NULL. Times are "
         "stored as 'HH:MM' 24-hour strings, so comparisons like "

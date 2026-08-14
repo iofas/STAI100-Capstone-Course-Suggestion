@@ -15,11 +15,13 @@ differs:
   System A (ours):  scheduler.solve_with_relaxation()  -> CP-SAT ILP.
   System B (base):  ask the LLM to pick a conflict-free set of sections.
 
-Both outputs are scored by the SAME validator (scheduler.validate_schedule,
-C1-C6) against the ORIGINAL constraints, with C3 grounding checked against the
-real database. A section the LLM invents fails C3; a clash fails C1; a repeated
-course fails C2; an out-of-scope course fails C4; a violated time/day/max limit
-fails C5.
+Both outputs are scored by the SAME grader (scheduler.grade_schedule, criteria
+C1-C7 defined in scheduler.py) against the ORIGINAL constraints, with the
+catalog-backed criteria checked against the real database. A clash fails C1; a
+repeated course fails C2; an invented section (or real section with invented
+times) fails C3; an out-of-scope course fails C4; a violated time/day/max limit
+fails C5; an ineligible course fails C6; a section with no attendable meeting
+fails C7.
 
 Run (from the repo root):
     python -m evaluation.eval_scheduler   # prints tables, writes evaluation/eval_results.md
@@ -30,18 +32,22 @@ from __future__ import annotations
 
 import json
 import os
+import statistics
+import time
 from collections import defaultdict
 from pathlib import Path
 
 from sql_agent.agent import _get_client
 from sql_agent.config import DEEPSEEK_MODEL
 from sql_agent.scheduler import (
+    CRITERIA,
     ScheduleConstraints,
+    ScheduleResult,
     Section,
     fetch_eligible_sections,
+    grade_schedule,
     minutes_to_hhmm,
     solve_with_relaxation,
-    validate_schedule,
 )
 
 CANDIDATES_PER_COURSE = 12   # cap so both systems share a bounded, equal pool
@@ -181,24 +187,38 @@ def llm_baseline_schedule(candidates: list[Section], c: ScheduleConstraints) -> 
 # --------------------------------------------------------------------------- #
 # Scoring
 # --------------------------------------------------------------------------- #
-_CRITERIA = ["C1_no_overlap", "C2_no_duplicates", "C3_grounded",
-             "C4_scope_faithful", "C5_constraints_hold"]
+_CRITERIA = list(CRITERIA)
 
 
-def _is_complete(chosen: list[Section], c: ScheduleConstraints) -> bool:
-    got = {s.course_code.upper() for s in chosen}
-    if c.desired_count:
-        return len(got) >= c.desired_count
-    return {code.upper() for code in c.desired_courses}.issubset(got)
+def _score(result: ScheduleResult, c: ScheduleConstraints,
+           pool: list[Section] | None = None) -> dict:
+    """Grade one run on all three axes: correct, complete, transparent.
 
-
-def _score(chosen: list[Section], c: ScheduleConstraints) -> dict:
-    report = validate_schedule(chosen, c, check_db=True) if chosen else {
-        k: False for k in _CRITERIA + ["correct"]
-    }
-    report["valid"] = all(report.get(k) for k in _CRITERIA[:4])   # C1-C4
-    report["complete"] = _is_complete(chosen, c)
+    Both systems go through the same grader, so the ILP gets no special
+    treatment: its relaxations only avoid counting as C5 violations because it
+    *reports* them, and a system that deviated silently fails `transparent`
+    instead. The baseline has no reporting channel, so it is graded as a run
+    that claimed to satisfy the request exactly.
+    """
+    if not result.chosen:
+        report = {k: False for k in _CRITERIA + ["correct"]}
+        report.update(failed=list(_CRITERIA), complete=False,
+                      transparent=False, negotiated=False, outcome="FAILED",
+                      coverage=0.0)
+    else:
+        report = grade_schedule(result, c, check_db=True, term=EVAL_TERM,
+                                pool=pool)
+    report["valid"] = report["correct"] and report["transparent"]
     return report
+
+
+def _as_result(chosen: list[Section], c: ScheduleConstraints) -> ScheduleResult:
+    """Wrap a bare list of picks (the baseline's output) as a ScheduleResult.
+
+    The baseline reports nothing - no relaxations, no dropped courses - so it
+    is graded against the constraints exactly as the student stated them.
+    """
+    return ScheduleResult(feasible=bool(chosen), chosen=chosen, effective=c)
 
 
 def main() -> None:
@@ -211,29 +231,33 @@ def main() -> None:
                                     term=EVAL_TERM),
             CANDIDATES_PER_COURSE,
         )
+        started = time.perf_counter()
         ilp_res = solve_with_relaxation(candidates, c)
-        ilp_score = _score(ilp_res.chosen, c)
+        ilp_seconds = time.perf_counter() - started
+        ilp_score = _score(ilp_res, c, pool=candidates)
 
+        started = time.perf_counter()
         try:
             base_chosen = llm_baseline_schedule(candidates, c)
         except Exception as exc:  # noqa: BLE001
             client_ok = False
             print(f"  ! baseline LLM call failed: {exc}")
             base_chosen = []
-        base_score = _score(base_chosen, c)
+        base_seconds = time.perf_counter() - started
+        base_score = _score(_as_result(base_chosen, c), c, pool=candidates)
 
         rows.append({
             "name": sc["name"], "n_candidates": len(candidates),
             "ilp": ilp_score, "ilp_relaxed": bool(ilp_res.relaxations),
             "base": base_score,
+            "ilp_seconds": ilp_seconds, "base_seconds": base_seconds,
         })
         print(f"[{sc['name']}]  candidates={len(candidates)}")
-        print(f"   ILP : valid(C1-4)={ilp_score['valid']}  complete={ilp_score['complete']}"
-              f"  C5={ilp_score['C5_constraints_hold']}  relaxed={bool(ilp_res.relaxations)}")
-        print(f"   LLM : valid(C1-4)={base_score['valid']}  complete={base_score['complete']}"
-              f"  C5={base_score['C5_constraints_hold']}  "
-              f"[C1={base_score['C1_no_overlap']} C2={base_score['C2_no_duplicates']} "
-              f"C3={base_score['C3_grounded']} C4={base_score['C4_scope_faithful']}]")
+        print(f"   ILP : {ilp_score['outcome']:10s} correct={ilp_score['correct']}"
+              f"  complete={ilp_score['complete']}  relaxed={bool(ilp_res.relaxations)}")
+        print(f"   LLM : {base_score['outcome']:10s} correct={base_score['correct']}"
+              f"  complete={base_score['complete']}"
+              f"  failed={base_score['failed'] or '-'}")
 
     _report(rows, client_ok)
 
@@ -251,43 +275,61 @@ def _report(rows, client_ok):
                      "numbers are incomplete.\n")
     lines.append(f"Scenarios: **{n}**. Both systems given identical constraints "
                  f"and the same capped candidate pool (<={CANDIDATES_PER_COURSE}"
-                 " sections/course). Scored by the C1-C6 validator against the "
-                 "original constraints (C3 grounding checked against the DB).\n")
+                 " sections/course), graded by the same C1-C7 validator, with "
+                 "the catalog-backed criteria (C3, C6) checked against term "
+                 f"{EVAL_TERM} in the database.\n")
 
     header = ("| Metric | ILP (ours) | LLM-only baseline |\n"
               "|---|---|---|")
     metric_rows = [
         ("C1 no overlapping timeslots", "C1_no_overlap"),
-        ("C2 no duplicate courses", "C2_no_duplicates"),
-        ("C3 grounded (real sections)", "C3_grounded"),
+        ("C2 no duplicates", "C2_no_duplicates"),
+        ("C3 grounded (real section + real times)", "C3_grounded"),
         ("C4 only requested courses", "C4_scope_faithful"),
         ("C5 hard constraints hold", "C5_constraints_hold"),
-        ("**Valid schedule (C1-C4)**", "valid"),
-        ("All requested courses scheduled", "complete"),
+        ("C6 eligible (prereqs met, not already taken)", "C6_eligible"),
+        ("C7 attendable sections", "C7_wellformed"),
+        ("**CORRECT (C1-C7)**", "correct"),
+        ("**TRANSPARENT (every compromise reported)**", "transparent"),
+        ("**SUCCESS (correct + transparent)**", "valid"),
+        ("COMPLETE (all requested courses scheduled)", "complete"),
     ]
     lines.append(header)
     for label, key in metric_rows:
         lines.append(f"| {label} | {_pct(rows, 'ilp', key):.0f}% | "
                      f"{_pct(rows, 'base', key):.0f}% |")
 
+    ilp_ms = statistics.fmean(r["ilp_seconds"] for r in rows) * 1000
+    base_s = statistics.fmean(r["base_seconds"] for r in rows)
+    lines.append(f"| Mean time to produce a schedule | {ilp_ms:.0f} ms | "
+                 f"{base_s:.1f} s |")
+    lines.append(f"| LLM calls per schedule | 0 | 1 |")
+
     relaxed = sum(1 for r in rows if r["ilp_relaxed"])
+    lines.append("")
+    lines.append("**Correct vs complete are different questions.** CORRECT means "
+                 "nothing in the schedule is wrong (C1-C7). COMPLETE means the "
+                 "student got everything they asked for. An over-constrained "
+                 "request can only be answered correctly *and* incompletely - "
+                 "which is a success, as long as the gap is reported.")
     lines.append("")
     lines.append(f"- ILP schedules that needed a **transparent relaxation** "
                  f"(reported to the student, not silent): {relaxed}/{n}.")
-    lines.append("- The ILP is expected to score **100% on C1-C4 by "
+    lines.append("- The ILP is expected to score **100% on C1-C7 by "
                  "construction**: the validator's constraints are the solver's "
-                 "constraints. Any baseline shortfall on C1/C2/C3 is a schedule "
-                 "that looks plausible but is wrong - the exact failure mode the "
-                 "project prevents.")
+                 "constraints. Any baseline shortfall is a schedule that looks "
+                 "plausible but is wrong - the exact failure mode this project "
+                 "prevents.")
     lines.append("")
     lines.append("## Per-scenario")
-    lines.append("| Scenario | ILP valid | ILP complete | LLM valid | LLM complete |")
-    lines.append("|---|---|---|---|---|")
+    lines.append("| Scenario | ILP outcome | LLM outcome | LLM failed criteria |")
+    lines.append("|---|---|---|---|")
     for r in rows:
-        lines.append(f"| {r['name']} | {'Y' if r['ilp']['valid'] else 'N'} | "
-                     f"{'Y' if r['ilp']['complete'] else 'N'} | "
-                     f"{'Y' if r['base']['valid'] else 'N'} | "
-                     f"{'Y' if r['base']['complete'] else 'N'} |")
+        failed = ", ".join(c.split("_")[0] for c in r["base"].get("failed", [])) or "-"
+        if not r["base"]["transparent"]:
+            failed = (failed + ", silent shortfall").lstrip("- ")
+        lines.append(f"| {r['name']} | {r['ilp']['outcome']} | "
+                     f"{r['base']['outcome']} | {failed} |")
 
     text = "\n".join(lines)
     # Write next to this script (evaluation/eval_results.md) so the output

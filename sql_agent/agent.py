@@ -81,6 +81,31 @@ def _is_safe_select(sql: str) -> bool:
     if not referenced_tables.issubset(_ALLOWED_TABLES): return False
     return True
 
+_JSON_OBJECT_PATTERN = re.compile(r"\{.*\}", re.DOTALL)
+
+
+def _extract_json(raw: str) -> str:
+    """Pull the JSON object out of a model reply that wrapped it in extra text.
+
+    `response_format={"type": "json_object"}` almost always yields bare JSON,
+    but a reply that arrives wrapped in ```json fences or with a stray sentence
+    around it would otherwise fail validation and be reported as an
+    unanswerable question. Salvage the outermost {...} block when that happens.
+
+    Args:
+        raw: The model's reply content, or None if the reply had no content.
+
+    Returns:
+        The substring from the first "{" to the last "}", or `raw` unchanged
+        (empty string if None) when no such block exists - in which case
+        validation fails as before.
+    """
+    if not raw:
+        return ""
+    match = _JSON_OBJECT_PATTERN.search(raw)
+    return match.group(0) if match else raw
+
+
 def generate_sql(question: str, history: list[dict] = None) -> dict:
     """Ask the LLM to translate a natural-language question into SQL.
 
@@ -105,6 +130,8 @@ def generate_sql(question: str, history: list[dict] = None) -> dict:
               the model declined or the JSON reply failed validation.
             - ``raw_response``: the unparsed JSON string from the model, kept
               for debugging/tracing.
+            - ``tokens``: prompt/completion/total token counts for the call
+              (values are None if the provider didn't report usage).
     """
     schema = get_schema_description()
     messages = build_messages(schema, question, history)
@@ -122,17 +149,30 @@ def generate_sql(question: str, history: list[dict] = None) -> dict:
     )
     
     raw = response.choices[0].message.content
-    
+
+    # Token counts, for the cost/efficiency metrics in evaluation/eval_agent.py.
+    # Absent on some providers, so never assume the field is there.
+    usage = getattr(response, "usage", None)
+    tokens = {
+        "prompt_tokens": getattr(usage, "prompt_tokens", None),
+        "completion_tokens": getattr(usage, "completion_tokens", None),
+        "total_tokens": getattr(usage, "total_tokens", None),
+    }
+
     # Pydantic validation
     try:
-        parsed_data = AgentOutput.model_validate_json(raw)
+        parsed_data = AgentOutput.model_validate_json(_extract_json(raw))
         reasoning = parsed_data.reasoning
         sql = parsed_data.sql.strip().strip("`").strip()
     except ValidationError as e:
-        reasoning = "Failed to parse JSON response."
+        # A parse failure and a genuine refusal both end up as sql == "NONE",
+        # so keep the reason distinguishable in the trace - otherwise a
+        # malformed reply looks exactly like "the model declined to answer".
+        reasoning = f"Failed to parse JSON response: {e}"
         sql = "NONE"
 
-    return {"question": question, "reasoning": reasoning, "sql": sql, "raw_response": raw}
+    return {"question": question, "reasoning": reasoning, "sql": sql,
+            "raw_response": raw, "tokens": tokens}
 
 def run_query(sql: str) -> list[dict]:
     """Execute an already-safety-checked SELECT and return the rows.
